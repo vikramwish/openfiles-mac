@@ -66,8 +66,7 @@ public actor FileLibrary {
     }
     /// Search scope is separate from explicit organization targets. Discovery never authorizes moves.
     public func enableDefaultDiscovery(home: URL) {
-        let common = ["Downloads", "Documents", "Desktop", "Pictures", "Music", "Movies"].map { home.appendingPathComponent($0, isDirectory: true).canonical }
-        discoveryRoots = common.filter { fm.fileExists(atPath: $0.path) } + [home.canonical]
+        discoveryRoots = MacScanScopes.defaults(home: home)
     }
     public func addRoot(_ url: URL) throws {
         let root = url.canonical

@@ -120,3 +120,8 @@ struct AddToCollectionMenu: View {
         }
     }
 }
+
+
+extension FileCollection {
+    var referenceCountLabel: String { files.count == 1 ? "1 reference" : "\(files.count) references" }
+}

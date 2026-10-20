@@ -62,13 +62,16 @@ public actor CleanupService {
     private let screenshotMetadata: any ScreenshotMetadataProvider
     private var review: CleanupReview?
     private var exclusions: [URL] = []
+    private var scanRoots: [URL] = []
+    private var digestCache: [String: (FileStamp, String)] = [:]
     public init(directory: URL, trash: any CleanupTrash = SystemCleanupTrash(), screenshotMetadata: any ScreenshotMetadataProvider = SystemScreenshotMetadata()) {
         appData = directory.canonical; self.trash = trash; self.screenshotMetadata = screenshotMetadata
     }
     public func cancelReview() { review = nil }
-    public func preview(files: [FileRecord], scope: URL, excluding protected: [URL] = [], now: Date = Date(), limit: Int = 5000) throws -> CleanupReview {
+    public func preview(files: [FileRecord], scope: URL, excluding protected: [URL] = [], now: Date = Date(), limit: Int = 5000, scopes: [URL]? = nil) throws -> CleanupReview {
         review = nil
         let scope = scope.canonical
+        scanRoots = MacScanScopes.reduce(scopes ?? [scope])
         exclusions = protected.map(\.canonical)
         var plan = CleanupReview(id: UUID(), scope: scope)
         var safe: [(FileRecord, FileStamp)] = []
@@ -77,10 +80,10 @@ public actor CleanupService {
         for file in files.sorted(by: { $0.url.path < $1.url.path }) {
             try Task.checkCancellation()
             let url = file.url.standardizedFileURL
-            guard syncContains(scope, url), seen.insert(url.path).inserted else { continue }
+            guard scanRoots.contains(where: { syncContains($0, url) }), seen.insert(url.path).inserted else { continue }
             if safe.count >= max(0, limit) { plan.limited = true; break }
             guard !file.sensitive, !file.isProject, !FileRules.sensitive(file.name),
-                  SemanticOrganizer.exclusion(url, roots: [scope], output: appData, appData: appData, excluded: exclusions, folderProtection: &folderProtection) == nil,
+                  SemanticOrganizer.exclusion(url, roots: scanRoots, output: appData, appData: appData, excluded: exclusions, folderProtection: &folderProtection) == nil,
                   let stamp = try? safeStamp(url, scope: scope), stamp.size > 0, stamp.size <= 256 * 1024 * 1024,
                   file.indexMetadata == nil || file.indexMetadata?.stamp == stamp else { plan.skipped += 1; continue }
             var normalized = file; normalized.url = url
@@ -97,7 +100,7 @@ public actor CleanupService {
                 try Task.checkCancellation()
                 guard hashedBytes + stamp.size <= hashBudget else { plan.limited = true; continue }
                 hashedBytes += stamp.size
-                guard let digest = try? checkedDigest(file.url, stamp: stamp, scope: scope) else { plan.skipped += 1; continue }
+                guard let digest = try? checkedDigest(file.url, stamp: stamp, scope: scope, allowCache: true) else { plan.skipped += 1; continue }
                 plan.checked += 1
                 groups[digest, default: []].append(CleanupFile(id: UUID(), url: file.url, bytes: stamp.size, modified: stamp.modified, kind: .duplicate,
                     evidence: "Same size and SHA-256 file contents. Names, metadata and references may differ; review which copy to keep.", relatedURL: nil, stamp: stamp, digest: digest))
@@ -115,15 +118,20 @@ public actor CleanupService {
             .sorted { $0.1.modified > $1.1.modified }.prefix(500)
         var similarityComparisons = 0
         var screenshotsAnalyzed = 0
+        var metadataCache: [String: ScreenshotFileMetadata] = [:]
+        func metadataForScreenshot(_ url: URL) -> ScreenshotFileMetadata {
+            if let cached = metadataCache[url.path] { return cached }
+            let value = screenshotMetadata.metadata(for: url); metadataCache[url.path] = value; return value
+        }
         for (file, stamp) in safe where !duplicatePaths.contains(file.url.path) && stamp.modified < age {
             try Task.checkCancellation()
             let ext = file.url.pathExtension.lowercased()
             let downloaded = file.url.deletingLastPathComponent().pathComponents.contains { $0.lowercased() == "downloads" }
             var kind: CleanupKind?, evidence = "", related: URL?, reviewScore = 0
             if ScreenshotReview.imageExtensions.contains(ext) {
-                let metadata = screenshotMetadata.metadata(for: file.url)
-                if let source = ScreenshotReview.source(for: file.url, metadata: metadata) {
-                    var signals = ScreenshotSignals(source: source, created: metadata.created, modified: stamp.modified, lastUsed: metadata.lastUsed, kept: !metadata.tags.isEmpty, contentTerms: file.imageContent?.textTerms)
+                let metadata = metadataForScreenshot(file.url)
+                if let source = ScreenshotReview.source(for: file.url, metadata: metadata), !ScreenshotReview.containsImportantContent([file.name]) {
+                    var signals = ScreenshotSignals(source: source, created: metadata.created, modified: stamp.modified, lastUsed: metadata.lastUsed, kept: !metadata.tags.isEmpty, contentTerms: file.imageContent.map { $0.textTerms + Array($0.subjectTerms) })
                     if ScreenshotReview.isOldUnkept(signals, now: now) {
                         if signals.contentTerms == nil {
                             guard screenshotsAnalyzed < 100 else { plan.limited = true; continue }
@@ -133,7 +141,7 @@ public actor CleanupService {
                         if let terms = signals.contentTerms,
                            let match = safe.first(where: { other in
                                other.1.modified > stamp.modified && other.0.url != file.url &&
-                               ScreenshotReview.source(for: other.0.url, metadata: screenshotMetadata.metadata(for: other.0.url)) != nil &&
+                               ScreenshotReview.source(for: other.0.url, metadata: metadataForScreenshot(other.0.url)) != nil &&
                                ScreenshotReview.textOverlap(terms, other.0.imageContent?.textTerms ?? [])
                            }) {
                             signals.hasNewerRelatedCapture = true; related = match.0.url
@@ -161,10 +169,11 @@ public actor CleanupService {
                     evidence = "Local content embeddings are similar (\(String(format: "%.2f", match.1))) to a newer document. This may be a distinct document or valuable draft; compare both before deciding."
                 }
             }
-            guard let kind, plan.suggestions.count < 100 else { continue }
+            guard let kind else { continue }
+            guard plan.suggestions.count < 100 else { plan.limited = true; continue }
             guard hashedBytes + stamp.size <= hashBudget else { plan.limited = true; continue }
             hashedBytes += stamp.size
-            guard let digest = try? checkedDigest(file.url, stamp: stamp, scope: scope) else { continue }
+            guard let digest = try? checkedDigest(file.url, stamp: stamp, scope: scope, allowCache: true) else { continue }
             plan.suggestions.append(CleanupFile(id: UUID(), url: file.url, bytes: stamp.size, modified: stamp.modified, kind: kind, evidence: evidence, relatedURL: related, reviewScore: reviewScore, stamp: stamp, digest: digest))
         }
         if similarityComparisons >= 100_000 { plan.limited = true }
@@ -223,10 +232,10 @@ public actor CleanupService {
         return result
     }
     private func safeStamp(_ url: URL, scope: URL) throws -> FileStamp {
-        guard syncContains(scope, url), url.standardizedFileURL.path == url.canonical.path,
+        guard scanRoots.contains(where: { syncContains($0, url) }), hasExpectedCanonicalPath(url),
               !syncContains(appData, url), !exclusions.contains(where: { syncContains($0, url) }) else { throw OpenFilesError.message("Excluded or redirected path") }
         var folderProtection: [String: Bool] = [:]
-        guard SemanticOrganizer.exclusion(url, roots: [scope], output: appData, appData: appData, excluded: exclusions, folderProtection: &folderProtection) == nil else { throw OpenFilesError.message("App, project or protected file") }
+        guard SemanticOrganizer.exclusion(url, roots: scanRoots, output: appData, appData: appData, excluded: exclusions, folderProtection: &folderProtection) == nil else { throw OpenFilesError.message("App, project or protected file") }
         var value = stat()
         guard lstat(url.path, &value) == 0, value.st_mode & S_IFMT == S_IFREG, value.st_nlink == 1 else { throw OpenFilesError.message("Only regular files with no hard links are eligible") }
         let resources = try url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
@@ -240,10 +249,13 @@ public actor CleanupService {
             throw OpenFilesError.message("This screenshot was opened recently or tagged to keep. Review it again.")
         }
     }
-    private func checkedDigest(_ url: URL, stamp: FileStamp, scope: URL) throws -> String {
+    private func checkedDigest(_ url: URL, stamp: FileStamp, scope: URL, allowCache: Bool = false) throws -> String {
         guard try safeStamp(url, scope: scope) == stamp else { throw OpenFilesError.message("File changed since review") }
+        if allowCache, let cached = digestCache[url.path], cached.0 == stamp { return cached.1 }
         let digest = try FileIntegrity.digest(url)
         guard try safeStamp(url, scope: scope) == stamp else { throw OpenFilesError.message("File changed during verification") }
+        if digestCache.count > 10_000 { digestCache.removeAll() }
+        digestCache[url.path] = (stamp, digest)
         return digest
     }
 }
