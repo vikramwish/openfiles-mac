@@ -19,6 +19,7 @@ struct StorageUsageView: View {
             if let usage {
                 if let available = usage.available, let total = usage.total {
                     Text("\(bytes(available)) available of \(bytes(total))")
+                    if let used = usage.used { Text("\(bytes(used)) used") }
                 } else if let used = usage.used {
                     Text("\(bytes(used)) used · storage limit unavailable")
                 } else if let available = usage.available {

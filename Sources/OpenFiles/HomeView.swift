@@ -7,6 +7,7 @@ private typealias HomeState<Value> = SwiftUI.State<Value>
 struct HomeView: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var collections: CollectionsModel
+    @ObservedObject var cloud: CloudBrowserModel
     @HomeState private var creating = false
     @FocusState private var searchFocused: Bool
     var body: some View {
@@ -37,6 +38,7 @@ struct HomeView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
+                        HomeCloudView(cloud: cloud)
                         HStack {
                             Text("Your collections").font(.title2.weight(.semibold))
                             Spacer()

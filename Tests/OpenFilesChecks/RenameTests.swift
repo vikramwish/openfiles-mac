@@ -33,7 +33,10 @@ struct RenameChecks {
         ("Embedding-ranked names require review and preserve bytes and extension", rankingAndRename),
         ("Rename rejects collisions, changed sources, and linked parents", staleAndCollision),
         ("Rename protects sensitive files, unavailable models, and stale model previews", eligibility),
-        ("Filename candidates cannot escape their folder or change type", names)
+        ("Filename candidates cannot escape their folder or change type", names),
+        ("Batch names retain all previews and apply only checked rows", batchSelection),
+        ("Batch rename preflights collisions and stale sources before moving anything", batchPreflight),
+        ("Batch suggestions explain exclusions, naming patterns, and cancellation", batchEligibility)
     ]
     static func rankingAndRename() async throws {
         let fixture = RenameFixture(); defer { fixture.cleanup() }
@@ -93,5 +96,66 @@ struct RenameChecks {
         let candidates = RenameNames.candidates(from: "# Kyoto / Travel: Plans\nKyoto Travel Plans\nPassword credentials", extension: "txt")
         checkEqual(candidates, ["Kyoto Travel Plans.txt"])
         try RenameNames.validate(candidates[0], source: source)
+    }
+
+    static func batchSelection() async throws {
+        let fixture = RenameFixture(); defer { fixture.cleanup() }
+        let library = try await fixture.make(RenameEmbedding())
+        var urls = [fixture.source]
+        for index in 1..<20 {
+            let url = fixture.source.deletingLastPathComponent().appendingPathComponent("scan-\(index).txt")
+            try fixture.contents.write(to: url, atomically: true, encoding: .utf8); urls.append(url)
+        }
+        let batch = try await library.previewBatchRename(urls)
+        checkEqual(batch.rows.count, 20); checkTrue(batch.rows.allSatisfy { $0.preview != nil && $0.problem == nil })
+        // Unrelated single-file reviews must not evict batch rows.
+        for _ in 0..<17 { _ = try await library.previewRename(fixture.source) }
+        let result = try await library.applyBatchRename(batch.id, names: [urls[0]: "Kyoto notes.txt", urls[1]: "Travel plans.txt"])
+        checkEqual(result.renamed, 2); checkEqual(result.outcomes.count, 2)
+        for entry in result.outcomes {
+            checkNil(entry.message)
+            if let destination = entry.destination { checkEqual(try String(contentsOf: destination, encoding: .utf8), fixture.contents) }
+        }
+        for untouched in urls.dropFirst(2) { checkTrue(FileManager.default.fileExists(atPath: untouched.path)) }
+        do { _ = try await library.applyBatchRename(batch.id, names: [urls[2]: "Another.txt"]); failCheck("Replayed batch") } catch { }
+    }
+
+    static func batchPreflight() async throws {
+        let fixture = RenameFixture(); defer { fixture.cleanup() }
+        let library = try await fixture.make(RenameEmbedding())
+        let second = fixture.source.deletingLastPathComponent().appendingPathComponent("second.txt")
+        try fixture.contents.write(to: second, atomically: true, encoding: .utf8)
+        let batch = try await library.previewBatchRename([fixture.source, second])
+        do { _ = try await library.applyBatchRename(batch.id, names: [fixture.source: "Plan.txt", second: "plan.txt"]); failCheck("Accepted duplicate batch destinations") } catch { }
+        checkTrue(FileManager.default.fileExists(atPath: fixture.source.path)); checkTrue(FileManager.default.fileExists(atPath: second.path))
+        try "Travel changed after review".write(to: second, atomically: true, encoding: .utf8)
+        do { _ = try await library.applyBatchRename(batch.id, names: [fixture.source: "One.txt", second: "Two.txt"]); failCheck("Moved files before finishing stale batch checks") } catch { }
+        checkTrue(FileManager.default.fileExists(atPath: fixture.source.path))
+        checkFalse(FileManager.default.fileExists(atPath: fixture.source.deletingLastPathComponent().appendingPathComponent("One.txt").path))
+        // A rejected preflight remains editable: choose only the still-valid row.
+        let result = try await library.applyBatchRename(batch.id, names: [fixture.source: "One.txt"])
+        checkEqual(result.renamed, 1)
+    }
+
+    static func batchEligibility() async throws {
+        let fixture = RenameFixture(); defer { fixture.cleanup() }
+        let library = try await fixture.make(RenameEmbedding())
+        let sensitive = fixture.source.deletingLastPathComponent().appendingPathComponent("password.txt")
+        try fixture.contents.write(to: sensitive, atomically: true, encoding: .utf8)
+        let batch = try await library.previewBatchRename([fixture.source, sensitive, fixture.source])
+        checkEqual(batch.rows.count, 2)
+        checkTrue(batch.rows.contains { $0.source == sensitive && $0.preview == nil && $0.problem != nil })
+        checkEqual(BatchRenamePattern.name("Travel plan.txt", prefix: " Project ", modified: nil), "Project - Travel plan.txt")
+        let dated = BatchRenamePattern.name("Travel plan.txt", prefix: "Project", modified: Date())
+        checkTrue(dated.hasSuffix(" - Project - Travel plan.txt")); checkEqual(String(dated.prefix(10)).count, 10)
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await library.applyBatchRename(batch.id, names: [fixture.source: "New name.txt"])
+        }
+        do { _ = try await cancelled.value; failCheck("Cancelled batch changed files") } catch { }
+        checkTrue(FileManager.default.fileExists(atPath: fixture.source.path))
+        try await library.setEmbeddingBackend { RenameEmbedding() }
+        do { _ = try await library.applyBatchRename(batch.id, names: [fixture.source: "New name.txt"]); failCheck("Used a batch from another model") } catch { }
+        do { _ = try await library.previewBatchRename([]); failCheck("Accepted empty batch") } catch { }
     }
 }

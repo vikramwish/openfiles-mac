@@ -12,6 +12,7 @@ public struct RenamePreview: Identifiable, Sendable {
     public let source: URL
     public let suggestions: [RenameSuggestion]
     public let model: String
+    public var modified: Date { stamp.modified }
     let stamp: FileStamp
     let digest: String
 }
@@ -54,6 +55,13 @@ public enum RenameNames {
 extension FileLibrary {
     /// Analyze only the selected local file. Cloud copies must first be downloaded or synced.
     public func previewRename(_ url: URL) async throws -> RenamePreview {
+        let preview = try await makeRenamePreview(url)
+        if renamePreviews.count >= 16 { renamePreviews.removeAll() }
+        renamePreviews[preview.id] = preview
+        return preview
+    }
+
+    func makeRenamePreview(_ url: URL) async throws -> RenamePreview {
         guard url.isFileURL else { throw OpenFilesError.message("Choose a file on this Mac.") }
         let source = url.deletingLastPathComponent().canonical.appendingPathComponent(url.lastPathComponent)
         try checkRenameEligibility(source)
@@ -90,8 +98,6 @@ extension FileLibrary {
         ranked.sort { $0.similarity == $1.similarity ? $0.name < $1.name : $0.similarity > $1.similarity }
         guard !ranked.isEmpty else { throw OpenFilesError.message("The model found no clear filename match for this content.") }
         let preview = RenamePreview(id: UUID(), source: source, suggestions: Array(ranked.prefix(3)), model: backend.displayName, stamp: stamp, digest: digest)
-        if renamePreviews.count >= 16 { renamePreviews.removeAll() }
-        renamePreviews[preview.id] = preview
         return preview
     }
 
@@ -102,6 +108,10 @@ extension FileLibrary {
         guard let preview = renamePreviews.removeValue(forKey: previewID) else {
             throw OpenFilesError.message("This name suggestion has expired. Analyze the file again.")
         }
+        return try await performRename(preview, name: name)
+    }
+
+    func renameDestination(_ preview: RenamePreview, name: String) throws -> URL {
         let source = preview.source
         try RenameNames.validate(name, source: source)
         try checkRenameEligibility(source)
@@ -116,6 +126,13 @@ extension FileLibrary {
         guard !names.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) else {
             throw OpenFilesError.message("A file with that name already exists. Choose another name.")
         }
+        return destination
+    }
+
+    func performRename(_ preview: RenamePreview, name: String) async throws -> RenameResult {
+        let destination = try renameDestination(preview, name: name)
+        let source = preview.source, fm = FileManager.default
+        try Task.checkCancellation()
         try fm.copyItem(at: source, to: destination)
         guard try FileStamp.read(source) == preview.stamp, try FileIntegrity.digest(source) == preview.digest,
               try FileIntegrity.digest(destination) == preview.digest else {

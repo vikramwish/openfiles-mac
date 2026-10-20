@@ -122,7 +122,7 @@ struct Runner {
             catch { failCheck("\(name): \(error.localizedDescription)"); try? suite.tearDownWithError() }
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
         }
-let scenarioGroups = [IndexChecks.scenarios, PipelineOptimizationChecks.scenarios, NavigationChecks.scenarios, PhotoToolChecks.scenarios, PhotoSimilarityChecks.scenarios, ImageContentChecks.scenarios, OrganizationChecks.scenarios, EmbeddingGemmaChecks.scenarios, DocumentPackChecks.scenarios, CollectionChecks.scenarios, AutomaticHistoryChecks.scenarios, CleanupChecks.scenarios, RenameChecks.scenarios, DeveloperCleanupChecks.scenarios]
+        let scenarioGroups = [IndexChecks.scenarios, PipelineOptimizationChecks.scenarios, NavigationChecks.scenarios, PhotoToolChecks.scenarios, PhotoSimilarityChecks.scenarios, ImageContentChecks.scenarios, OrganizationChecks.scenarios, EmbeddingGemmaChecks.scenarios, DocumentPackChecks.scenarios, CollectionChecks.scenarios, AutomaticHistoryChecks.scenarios, CleanupChecks.scenarios, RenameChecks.scenarios, DeveloperCleanupChecks.scenarios, CloudPlacementChecks.scenarios]
         for (name, check) in scenarioGroups.flatMap({ $0 }) {
             let previous = log.failures
             do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }

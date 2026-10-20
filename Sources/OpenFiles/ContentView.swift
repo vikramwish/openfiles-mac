@@ -31,7 +31,7 @@ struct ContentView: View {
                     } else {
                         Group {
                             switch model.section {
-                            case .home: HomeView(collections: model.collections)
+                            case .home: HomeView(collections: model.collections, cloud: cloudModel)
                             case .collections: CollectionsView(collections: model.collections)
                             case .organize: OrganizationView(session: organizationSession, automaticallyAnalyze: true)
                             case .photos: PhotoLibraryView(model: model.photoLibrary)
@@ -55,6 +55,16 @@ struct ContentView: View {
                         }
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                Divider()
+                HStack(alignment: .top, spacing: 24) {
+                    VolumeStorageView(url: model.section == .files ? model.currentFolder : FileManager.default.homeDirectoryForCurrentUser)
+                    Spacer()
+                    if cloudModel.connected {
+                        StorageUsageView(title: cloudModel.provider == .googleDrive ? "Google account storage" : "OneDrive storage", usage: cloudModel.storageUsage, loading: cloudModel.loadingStorage, error: cloudModel.storageError)
+                        Button { cloudModel.refreshStorageUsage() } label: { Image(systemName: "arrow.clockwise") }
+                            .buttonStyle(.borderless).help("Refresh cloud storage usage").accessibilityLabel("Refresh cloud storage usage")
+                    }
+                }.padding(.horizontal, 16).padding(.vertical, 8)
                 Divider()
                 HStack(spacing: 8) {
                     if model.section == .cloud {
@@ -109,6 +119,7 @@ struct ContentView: View {
             }
         }
         .sheet(item: $model.renameItem) { item in RenameSuggestionView(item: item).environmentObject(model) }
+        .sheet(item: $model.batchRenameRequest) { request in BatchRenameView(request: request).environmentObject(model) }
     }
     private var sidebarSelection: Binding<String?> {
         Binding(get: {
