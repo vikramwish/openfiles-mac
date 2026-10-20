@@ -6,6 +6,14 @@ public struct OrganizationContext: Sendable {
     public let folders: [String]
     public let reasons: [String]
 
+    public static func suggestions(for files: [FileRecord], roots: [URL]) -> [UUID: Self] {
+        var result: [UUID: Self] = [:]
+        for file in files {
+            if let suggestion = suggest(for: file) { result[file.id] = suggestion }
+        }
+        return result
+    }
+
     public static func suggest(for file: FileRecord, fallbackTopic: String? = nil) -> Self? {
         let filename = Set(FileSearchQuery.words(file.url.deletingPathExtension().lastPathComponent))
         let parents = Array(file.url.deletingLastPathComponent().pathComponents.suffix(5))
@@ -131,7 +139,7 @@ public struct OrganizationContext: Sendable {
     }
 
     /// Folder components must remain single, readable names, never executable paths.
-    private static func clean(_ input: String) -> String? {
+    static func clean(_ input: String) -> String? {
         let text = input.components(separatedBy: .controlCharacters).joined(separator: " ")
             .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
             .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
