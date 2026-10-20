@@ -7,7 +7,7 @@ Create a short-lived branch (`codex/<topic>` for agent changes, or your team's c
 ## Boundaries
 
 - `OpenFilesCore` owns the independent filesystem browser, filesystem access, persistence, embeddings, moves, snapshots, and encrypted storage. Keep slow work off the main actor.
-- `OpenFilesCloud` owns read-only provider requests, token renewal, remote item models, and safe downloads. `make test-cloud` runs its fixture-based checks without contacting either provider and also works on Linux with Swift installed.
+- `OpenFilesCloud` owns provider requests, token renewal, remote item models, uploads/downloads, and paired-folder reconciliation. Keep write scopes opt-in, enforce conditional remote replacements, retain verified local backups, and preserve manual deletion handling. `make test-cloud` runs its fixture-based checks without contacting either provider and also works on Linux with Swift installed.
 - `OpenFiles` owns user consent, native file pickers, progress, navigation, and error presentation. Pass selected URLs to the core; do not embed destructive operations in view code.
 - Add meaningful tests when changing moves, restores, snapshots, or exclusion rules. Use temporary fixtures. Never scan a developer's home folder in tests.
 - Do not commit personal files, model caches, disk images, app bundles, API keys, or generated build output.

@@ -33,7 +33,7 @@ struct ContentView: View {
                 HStack(spacing: 8) {
                     if model.section != .cloud && (model.busy || model.indexing) { ProgressView().controlSize(.mini) }
                     else { Image(systemName: "checkmark.circle").foregroundStyle(.secondary) }
-                    Text(model.section == .cloud ? "Read-only cloud access · Save local copies when you choose" : model.status).lineLimit(2)
+                    Text(model.section == .cloud ? "Cloud transfers and sync stay under your control" : model.status).lineLimit(2)
                     Spacer()
                     Text(model.section == .cloud ? "CLOUD STORAGE" : model.indexing ? "SEMANTIC INDEXING" : "ON DEVICE").font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1).foregroundStyle(.secondary)
                 }.font(.system(size: 11)).padding(.horizontal, 28).padding(.vertical, 12)
