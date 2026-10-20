@@ -201,11 +201,13 @@ private final class OAuthLoopbackReceiver {
         catch { throw CloudAuthenticationError.listenerUnavailable }
         self.listener = listener
         listener.stateUpdateHandler = { [weak self] state in
-            Task { @MainActor in self?.listenerChanged(state) }
+            guard let self else { return }
+            Task { @MainActor [self] in self.listenerChanged(state) }
         }
         listener.newConnectionHandler = { [weak self] connection in
-            Task { @MainActor in
-                guard let self, self.outcome == nil else { connection.cancel(); return }
+            guard let self else { connection.cancel(); return }
+            Task { @MainActor [self] in
+                guard self.outcome == nil else { connection.cancel(); return }
                 // Bound resource usage even if another local process sends junk.
                 guard self.connections.count < 8 else { connection.cancel(); return }
                 let identifier = UUID()
@@ -254,8 +256,9 @@ private final class OAuthLoopbackReceiver {
 
     private func receive(_ connection: NWConnection, identifier: UUID, buffer: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, complete, error in
-            Task { @MainActor in
-                guard let self, self.connections[identifier] != nil else { return }
+            guard let self else { return }
+            Task { @MainActor [self] in
+                guard self.connections[identifier] != nil else { return }
                 var received = buffer
                 if let data { received.append(data) }
                 if received.count > 16_384 {
@@ -293,9 +296,9 @@ private final class OAuthLoopbackReceiver {
         var response = Data("HTTP/1.1 \(status)\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: \(body.count)\r\nCache-Control: no-store\r\nPragma: no-cache\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n".utf8)
         response.append(body)
         connection.send(content: response, completion: .contentProcessed { [weak self] _ in
-            Task { @MainActor in
+            guard let self else { connection.cancel(); return }
+            Task { @MainActor [self] in
                 connection.cancel()
-                guard let self else { return }
                 self.connections.removeValue(forKey: identifier)
                 if let result { self.finish(result) }
             }

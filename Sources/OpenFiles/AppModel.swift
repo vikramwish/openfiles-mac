@@ -324,13 +324,15 @@ final class AppModel: ObservableObject {
         watchedRoots = roots
         fileWatcher?.stop()
         let watcher = FileEventWatcher { [weak self] urls, overflow in
-            Task { @MainActor in self?.queueSync(urls, reconcile: overflow) }
+            guard let self else { return }
+            Task { @MainActor [self] in self.queueSync(urls, reconcile: overflow) }
         }
         fileWatcher = watcher
         syncStatus = watcher.start(roots: roots) ? "Live sync" : "Watcher unavailable · periodic reconciliation"
         if wakeObserver == nil {
             wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.queueSync([], reconcile: true) }
+                guard let self else { return }
+                Task { @MainActor [self] in self.queueSync([], reconcile: true) }
             }
         }
     }
