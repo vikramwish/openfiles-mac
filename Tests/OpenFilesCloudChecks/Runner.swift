@@ -534,7 +534,7 @@ private struct Runner {
             ("Concurrent requests share one persisted refresh", concurrentRefresh),
             ("Unauthorized requests renew once before requiring reconnect", unauthorizedRetry),
             ("Cancelled sign-in rejects late tokens", cancelledSignIn)
-        ]
+        ] + syncScenarios + uploadScenarios
         var failures = 0
         for (name, scenario) in scenarios {
             do { try await scenario(); print("PASS \(name)") }

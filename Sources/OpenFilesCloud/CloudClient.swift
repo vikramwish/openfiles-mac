@@ -4,11 +4,11 @@ import FoundationNetworking
 #endif
 
 /// One explicitly connected account per provider. Cloud metadata stays outside the local index.
-public actor CloudClient {
+public actor CloudClient: CloudSyncRemote {
     public let configuration: CloudConfiguration
-    private let store: any CloudCredentialStore
-    private let transport: any CloudHTTPTransport
-    private var generation = UUID()
+    let store: any CloudCredentialStore
+    let transport: any CloudHTTPTransport
+    var generation = UUID()
     private var refreshTask: Task<CloudToken, Error>?
     private var refreshID: UUID?
 
@@ -33,7 +33,7 @@ public actor CloudClient {
             URLQueryItem(name: "code_challenge_method", value: "S256")
         ]
         if configuration.provider == .googleDrive {
-            values += [URLQueryItem(name: "access_type", value: "offline"), URLQueryItem(name: "prompt", value: "consent")]
+            values += [URLQueryItem(name: "access_type", value: "offline"), URLQueryItem(name: "prompt", value: "consent select_account")]
         } else {
             values += [URLQueryItem(name: "response_mode", value: "query"), URLQueryItem(name: "prompt", value: "select_account")]
         }
@@ -90,7 +90,7 @@ public actor CloudClient {
                     return CloudItem(id: item.id, name: item.name, isFolder: folder,
                         size: item.size.flatMap(Int64.init), modified: Self.date(item.modifiedTime),
                         webURL: Self.webURL(item.webViewLink, provider: .googleDrive),
-                        canDownload: !native && item.capabilities?.canDownload != false)
+                        canDownload: !native && item.capabilities?.canDownload != false, revision: item.version)
                 }
                 return CloudPage(items: Self.sorted(items), nextPageToken: response.nextPageToken?.nilIfEmpty)
             case .oneDrive:
@@ -103,7 +103,7 @@ public actor CloudClient {
                     return CloudItem(id: item.id, name: item.name, isFolder: item.folder != nil && !remote,
                         size: item.size, modified: Self.date(item.lastModifiedDateTime),
                         webURL: Self.webURL(item.webUrl, provider: .oneDrive),
-                        canDownload: item.file != nil && !remote)
+                        canDownload: item.file != nil && !remote, revision: item.eTag, etag: item.eTag)
                 }
                 return CloudPage(items: Self.sorted(items), nextPageToken: response.nextLink?.nilIfEmpty)
             }
@@ -164,9 +164,7 @@ public actor CloudClient {
         }
     }
 
-    private var scope: String {
-        configuration.provider == .googleDrive ? "https://www.googleapis.com/auth/drive.readonly" : "Files.Read offline_access"
-    }
+    private var scope: String { configuration.scope }
 
     private func listingRequest(folderID: String?, pageToken: String?) throws -> URLRequest {
         switch configuration.provider {
@@ -178,7 +176,7 @@ public actor CloudClient {
             components.queryItems = [
                 URLQueryItem(name: "q", value: "'\(escaped)' in parents and trashed = false"),
                 URLQueryItem(name: "pageSize", value: "100"),
-                URLQueryItem(name: "fields", value: "nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink,capabilities(canDownload))"),
+                URLQueryItem(name: "fields", value: "nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink,version,capabilities(canDownload))"),
                 URLQueryItem(name: "orderBy", value: "folder,name_natural")
             ]
             if let pageToken { components.queryItems?.append(URLQueryItem(name: "pageToken", value: pageToken)) }
@@ -189,13 +187,13 @@ public actor CloudClient {
             var components = URLComponents(string: "https://graph.microsoft.com/v1.0/me/drive/\(path)/children")!
             components.queryItems = [
                 URLQueryItem(name: "$top", value: "100"),
-                URLQueryItem(name: "$select", value: "id,name,size,folder,file,remoteItem,lastModifiedDateTime,webUrl")
+                URLQueryItem(name: "$select", value: "id,name,size,folder,file,remoteItem,lastModifiedDateTime,webUrl,eTag")
             ]
             return URLRequest(url: components.url!)
         }
     }
 
-    private func authenticatedSend(_ original: URLRequest, generation current: UUID) async throws -> (Data, HTTPURLResponse) {
+    func authenticatedSend(_ original: URLRequest, generation current: UUID) async throws -> (Data, HTTPURLResponse) {
         var request = original
         request.setValue("Bearer \(try await accessToken(generation: current))", forHTTPHeaderField: "Authorization")
         var result = try await transport.send(request)
@@ -213,7 +211,7 @@ public actor CloudClient {
         return result
     }
 
-    private func accessToken(forceRefresh: Bool = false, generation current: UUID) async throws -> String {
+    func accessToken(forceRefresh: Bool = false, generation current: UUID) async throws -> String {
         try ensureCurrent(current)
         guard let saved = try await store.load(for: configuration.provider) else { throw CloudError.connectionRequired }
         try ensureCurrent(current)
@@ -231,7 +229,7 @@ public actor CloudClient {
             identifier = UUID()
             task = Task {
                 let token = try await Self.requestToken(configuration: self.configuration, transport: self.transport,
-                    values: ["grant_type": "refresh_token", "refresh_token": refreshToken], existingRefreshToken: refreshToken)
+                    values: ["grant_type": "refresh_token", "refresh_token": refreshToken], existingRefreshToken: refreshToken, existingScopes: saved.scopes)
                 try self.ensureCurrent(current)
                 // A shared renewal persists once, even when multiple requests await it.
                 try await self.store.save(token, for: self.configuration.provider)
@@ -259,17 +257,17 @@ public actor CloudClient {
         try await store.remove(for: configuration.provider)
     }
 
-    private func ensureCurrent(_ current: UUID) throws {
+    func ensureCurrent(_ current: UUID) throws {
         try Task.checkCancellation()
         guard generation == current else { throw CancellationError() }
     }
 
     private static func requestToken(configuration: CloudConfiguration, transport: any CloudHTTPTransport,
-                                     values: [String: String], existingRefreshToken: String?) async throws -> CloudToken {
+                                     values: [String: String], existingRefreshToken: String?, existingScopes: String? = nil) async throws -> CloudToken {
         var values = values
         values["client_id"] = configuration.clientID
         if configuration.provider == .googleDrive, let secret = configuration.clientSecret { values["client_secret"] = secret }
-        if configuration.provider == .oneDrive { values["scope"] = "Files.Read offline_access" }
+        if configuration.provider == .oneDrive { values["scope"] = configuration.scope }
         let endpoint = configuration.provider == .googleDrive
             ? "https://oauth2.googleapis.com/token"
             : "https://login.microsoftonline.com/common/oauth2/v2.0/token"
@@ -291,7 +289,8 @@ public actor CloudClient {
               response.token_type.lowercased() == "bearer" else { throw CloudError.invalidResponse }
         return CloudToken(accessToken: response.access_token,
             refreshToken: response.refresh_token?.nilIfEmpty ?? existingRefreshToken,
-            expiresAt: Date().addingTimeInterval(response.expires_in))
+            expiresAt: Date().addingTimeInterval(response.expires_in),
+            scopes: response.scope ?? (values["grant_type"] == "authorization_code" ? configuration.scope : existingScopes))
     }
 
     private static func form(_ values: [String: String]) -> String {
@@ -306,7 +305,7 @@ public actor CloudClient {
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { throw CloudError.invalidCallback }
     }
 
-    private static func pathComponent(_ value: String) throws -> String {
+    static func pathComponent(_ value: String) throws -> String {
         guard !value.isEmpty, value != ".", value != ".." else { throw CloudError.invalidResponse }
         let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
         guard let encoded = value.addingPercentEncoding(withAllowedCharacters: allowed) else { throw CloudError.invalidResponse }
@@ -322,7 +321,7 @@ public actor CloudClient {
         return url
     }
 
-    private static func downloadURL(_ value: String) throws -> URL {
+    static func downloadURL(_ value: String) throws -> URL {
         guard let components = URLComponents(string: value), components.scheme == "https",
               let host = components.host?.lowercased(), host.contains("."),
               host != "localhost", !host.hasSuffix(".localhost"), !host.hasSuffix(".local"),
@@ -333,7 +332,7 @@ public actor CloudClient {
         return url
     }
 
-    private static func webURL(_ value: String?, provider: CloudProvider) -> URL? {
+    static func webURL(_ value: String?, provider: CloudProvider) -> URL? {
         guard let value, let components = URLComponents(string: value), components.scheme == "https",
               components.user == nil, components.password == nil, components.port == nil || components.port == 443,
               let host = components.host?.lowercased() else { return nil }
@@ -343,7 +342,7 @@ public actor CloudClient {
         return components.url
     }
 
-    private static func date(_ value: String?) -> Date? {
+    static func date(_ value: String?) -> Date? {
         guard let value else { return nil }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -357,12 +356,13 @@ public actor CloudClient {
         }
     }
 
-    private static func checkStatus(_ status: Int) throws {
+    static func checkStatus(_ status: Int) throws {
         switch status {
         case 200..<300: return
         case 401: throw CloudError.connectionRequired
         case 403: throw CloudError.accessDenied
         case 404: throw CloudError.notFound
+        case 409, 412: throw CloudError.conflict("The remote item changed or the destination already exists. Refresh and review again.")
         case 429: throw CloudError.rateLimited
         default: throw CloudError.serviceUnavailable(status)
         }
@@ -374,18 +374,20 @@ private struct TokenResponse: Decodable {
     let refresh_token: String?
     let expires_in: Double
     let token_type: String
+    let scope: String?
 }
 private struct TokenFailure: Decodable { let error: String }
 private struct GoogleList: Decodable {
     let files: [GoogleItem]
     let nextPageToken: String?
 }
-private struct GoogleItem: Decodable {
+struct GoogleItem: Decodable {
     let id: String
     let name: String
     let mimeType: String
     let size: String?
     let modifiedTime: String?
+    let version: String?
     let webViewLink: String?
     let capabilities: Capabilities?
     struct Capabilities: Decodable { let canDownload: Bool? }
@@ -395,11 +397,12 @@ private struct MicrosoftList: Decodable {
     let nextLink: String?
     enum CodingKeys: String, CodingKey { case value; case nextLink = "@odata.nextLink" }
 }
-private struct MicrosoftItem: Decodable {
+struct MicrosoftItem: Decodable {
     let id: String
     let name: String
     let size: Int64?
     let lastModifiedDateTime: String?
+    let eTag: String?
     let webUrl: String?
     let folder: Facet?
     let file: Facet?
