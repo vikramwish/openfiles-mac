@@ -31,6 +31,11 @@ public struct AgentClient: Sendable {
     }
 
     public func chat(model: String, system: String, user: String, maxTokens: Int = 4000) async throws -> String {
+        try await chat(model: model, system: system, parts: [.text(user)], maxTokens: maxTokens)
+    }
+
+    /// Multimodal request: text parts plus optional downscaled image previews.
+    public func chat(model: String, system: String, parts: [AgentContentPart], maxTokens: Int = 4000) async throws -> String {
         var request = URLRequest(url: base.appendingPathComponent("chat/completions"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -42,7 +47,7 @@ public struct AgentClient: Sendable {
             "max_tokens": maxTokens,
             "messages": [
                 ["role": "system", "content": system],
-                ["role": "user", "content": user]
+                ["role": "user", "content": parts.map { $0.jsonObject() }]
             ]
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)

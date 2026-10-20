@@ -54,9 +54,29 @@ extension AppModel {
                 return AgentFileEntry(url: entry.url, isFolder: entry.isFolder, bytes: entry.bytes, excerpt: excerpt)
             }
         }
+        var parts: [AgentContentPart] = []
+        if agentIncludeExcerpts {
+            // Downscaled previews of up to 4 image files let the model rename screenshots from what they show.
+            let imageCandidates = entries
+                .filter { AgentImagePreview.isVisionCandidate(path: $0.url.path, bytes: $0.bytes) }
+                .prefix(4).map(\.url)
+            if !imageCandidates.isEmpty {
+                let previews = await Task.detached(priority: .utility) { () -> [AgentContentPart] in
+                    var result: [AgentContentPart] = []
+                    for url in imageCandidates {
+                        if let preview = AgentImagePreview.downscale(path: url.path) {
+                            result.append(.imageData(mediaType: preview.mediaType, base64: preview.base64))
+                        }
+                    }
+                    return result
+                }.value
+                parts = previews
+            }
+        }
         let prompt = AgentPrompt.userPrompt(instruction: instruction, currentFolder: currentFolder, selection: selectedURL, entries: entries, includeExcerpts: agentIncludeExcerpts)
+        parts.insert(.text(prompt), at: 0)
         do {
-            let content = try await client.chat(model: agentModel, system: AgentPrompt.systemPrompt(), user: prompt)
+            let content = try await client.chat(model: agentModel, system: AgentPrompt.systemPrompt(), parts: parts)
             guard let data = AgentPlanCodec.extractJSON(in: content), let plan = AgentPlanCodec.decode(data) else {
                 agentError = "The model did not return a usable plan. Try rephrasing the request."
                 return

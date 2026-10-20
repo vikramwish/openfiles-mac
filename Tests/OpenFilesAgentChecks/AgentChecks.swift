@@ -1,5 +1,7 @@
 import Foundation
 import Darwin
+import CoreGraphics
+import ImageIO
 import OpenFilesAgent
 import OpenFilesCore
 
@@ -247,5 +249,56 @@ enum AgentChecks {
         try expect(goodMove.availability(home: home, roots: [files]) == nil, "a move to a folder that will be created stays available")
         let goodNavigate = AgentAction(kind: .navigate, folder: home)
         try expect(goodNavigate.availability(home: home, roots: [files]) == nil, "valid navigate is available")
+    }
+
+    static func clientSendsMultimodalParts() async throws {
+        let transport = MockTransport([Reply(#"{"choices":[{"message":{"content":"{\"actions\":[]}"}}]}"#)])
+        let client = AgentClient(base: URL(string: "https://openrouter.ai/api/v1")!, apiKey: "sk-test", transport: transport)
+        _ = try await client.chat(model: "vision-model", system: "s", parts: [
+            .text("rename these screenshots"),
+            .imageData(mediaType: "image/jpeg", base64: "QUJD")
+        ])
+        let requests = await transport.recorded()
+        try expect(requests.count == 1, "one request")
+        let body = try JSONSerialization.jsonObject(with: requests[0].httpBody ?? Data()) as? [String: Any]
+        let messages = body?["messages"] as? [[String: Any]]
+        try expect(messages?.count == 2, "system plus user message")
+        try expect(messages?[0]["content"] as? String == "s", "system content stays plain text")
+        let parts = messages?[1]["content"] as? [[String: Any]]
+        try expect(parts?.count == 2, "two content parts")
+        try expect(parts?[0]["type"] as? String == "text" && parts?[0]["text"] as? String == "rename these screenshots", "text part first")
+        let image = parts?[1]
+        try expect(image?["type"] as? String == "image_url", "image part second")
+        let url = ((image?["image_url"] as? [String: Any])?["url"] as? String) ?? ""
+        try expect(url == "data:image/jpeg;base64,QUJD", "data URL built from the preview")
+    }
+
+    static func imagePreviewDownscales() async throws {
+        // Draw a large synthetic JPEG with CoreGraphics, then verify the bounded preview.
+        let width = 2000, height = 1200
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let image = context.makeImage() else { throw CheckFailure("test image could not be drawn") }
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("OpenFilesAgentPreview-\(UUID()).jpg").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let container = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(container, "public.jpeg" as CFString, 1, nil) else {
+            throw CheckFailure("destination failed")
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw CheckFailure("encoding failed") }
+        let original = container as Data
+        try original.write(to: URL(fileURLWithPath: path))
+
+        try expect(AgentImagePreview.isVisionCandidate(path: path, bytes: Int64(original.count)), "recognized image candidate")
+        try expect(!AgentImagePreview.isVisionCandidate(path: path.replacingOccurrences(of: ".jpg", with: ".txt"), bytes: Int64(original.count)), "non-image extensions are refused")
+        try expect(!AgentImagePreview.isVisionCandidate(path: path, bytes: 20 * 1024 * 1024), "oversized files are refused")
+        guard let preview = AgentImagePreview.downscale(path: path) else { throw CheckFailure("preview should downscale") }
+        try expect(preview.mediaType == "image/jpeg", "JPEG media type")
+        try expect(preview.base64.hasPrefix("/9j/"), "JPEG magic bytes after downscale")
+        let decoded = Data(base64Encoded: preview.base64) ?? Data()
+        try expect(decoded.count < original.count, "preview is smaller than the original")
+        try expect(decoded.count < 400_000, "preview stays bounded")
     }
 }

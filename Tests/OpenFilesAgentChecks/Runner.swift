@@ -59,7 +59,9 @@ struct Runner {
             ("Agent move preview refuses unsafe sources and destinations", AgentChecks.movePreviewRefusesUnsafeSources),
             ("Agent move apply re-verifies files and never replaces originals", AgentChecks.moveApplyReverifies),
             ("Agent navigate accepts a path alias and deduplicates", AgentChecks.navigatePathAlias),
-            ("Agent availability flags inapplicable actions", AgentChecks.availabilityFlagsInapplicableActions)
+            ("Agent availability flags inapplicable actions", AgentChecks.availabilityFlagsInapplicableActions),
+            ("Agent client sends multimodal parts with image previews", AgentChecks.clientSendsMultimodalParts),
+            ("Agent image previews downscale and bound their size", AgentChecks.imagePreviewDownscales)
         ]
         var failures = 0
         for (name, scenario) in scenarios {

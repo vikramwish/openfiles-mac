@@ -18,9 +18,13 @@ The panel speaks the OpenAI-compatible chat API. Presets cover **OpenRouter** (d
 
 The API key is stored only in the macOS **Keychain** (like cloud registration fields) and is never written to library.json, UserDefaults or logs. **Import key from Hermes…** copies your existing `OPENROUTER_API_KEY` from the Hermes configuration (`~/.hermes/.env` or `~/.hermes/profiles/*/.env`) into Keychain. **Remove key** deletes it.
 
+## Screenshots and other images
+
+With **content previews** enabled (the default), up to four image files in the current folder (≤ 10 MB each) are downscaled locally to ~1024 px JPEG previews and attached to the request in the OpenAI-compatible `image_url` format, so the model can rename screenshots from what they show. The original files never leave your Mac; only the downscaled previews are sent, and the rename keeps the original image extension. Applying still runs the reviewed rename flow (5 MB readable-content cap applies to the source file).
+
 ## What is sent
 
-For the folder you are browsing: file names, folder paths, sizes and your request. With **excerpts** enabled (the default), the first 400 characters of small text files (≤ 64 KB, up to 20 files) are included so renames can reflect content. Potentially sensitive files and excerpts are filtered out locally before anything is sent, and at most 60 entries are included. File contents are read for no other purpose and never leave your Mac except as these excerpts. Each request opens with a system prompt that constrains the model to the paths in context.
+For the folder you are browsing: file names, folder paths, sizes and your request. With **previews** enabled (the default), the first 400 characters of small text files (≤ 64 KB, up to 20 files) are included so renames can reflect content, plus the downscaled image previews described above. Potentially sensitive files and excerpts are filtered out locally before anything is sent, and at most 60 entries are included. File contents are read for no other purpose and never leave your Mac except as these excerpts and previews. Each request opens with a system prompt that constrains the model to the paths in context.
 
 ## Checks
 
