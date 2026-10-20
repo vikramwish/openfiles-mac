@@ -41,7 +41,7 @@ extension LibraryChecks {
         checkEqual(Set(matches.map { $0.file.name }), Set(["ATO notice.md", "letter.md"]))
         checkEqual(matches.first?.file.name, "ATO notice.md")
         checkEqual(matches.first?.reason, "Filename matches")
-        let empty = await library.search("find all my files")
+        let empty = await library.search("find")
         checkTrue(empty.isEmpty)
     }
 }

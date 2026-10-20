@@ -43,7 +43,7 @@ struct OpenFilesApp: App {
                 }.keyboardShortcut("h", modifiers: [.command, .option]).disabled(model.selectedItem == nil || model.selectedItem?.sensitive == true)
                 if let url = model.editingURL {
                     Button("Versions for \(url.lastPathComponent)") { model.showVersionPanel(for: url) }
-                    Button("Commit saved changes for \(url.lastPathComponent)") { model.commitFile(url, message: "") }.disabled(model.busy)
+                    Button("Review & commit \(url.lastPathComponent)") { model.showVersionPanel(for: url) }.disabled(model.busy)
                 }
                 Divider()
                 Button("All version history") { model.section = .history; model.showWorkspace?() }
@@ -78,7 +78,7 @@ struct MenuContents: View {
         if let url = model.editingURL {
             Text(url.lastPathComponent)
             Button("Versions for \(url.lastPathComponent)") { model.showVersionPanel(for: url) }
-            Button("Commit saved changes") { model.commitFile(url, message: "") }.disabled(model.busy)
+            Button("Review & commit changes") { model.showVersionPanel(for: url) }.disabled(model.busy)
             Divider()
         }
         Button("Commit file…") { show(); model.chooseCommit() }.disabled(model.busy)

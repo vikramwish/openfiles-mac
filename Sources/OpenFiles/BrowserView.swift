@@ -3,51 +3,33 @@ import AppKit
 import QuickLookUI
 import OpenFilesCore
 
+private typealias BrowserState<Value> = SwiftUI.State<Value>
+
 struct BrowserToolbar: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 14) {
-                HStack(spacing: 5) {
-                    Button { model.back() } label: { Image(systemName: "chevron.left") }.disabled(!model.canGoBack).help("Back").accessibilityLabel("Back")
-                    Button { model.forward() } label: { Image(systemName: "chevron.right") }.disabled(!model.canGoForward).help("Forward").accessibilityLabel("Forward")
-                    Button { model.up() } label: { Image(systemName: "arrow.up") }.disabled(!model.canGoUp).help("Parent folder").accessibilityLabel("Parent folder")
-                }.buttonStyle(.borderless)
-                Text(model.query.isEmpty ? (model.currentFolder.path == "/" ? "This Mac" : model.currentFolder.lastPathComponent) : "Search results").font(.system(size: 18, weight: .semibold)).lineLimit(1)
-                Spacer()
-                Button { model.showingNewFolder = true } label: { Image(systemName: "folder.badge.plus") }.help("New folder").accessibilityLabel("New folder")
-                Menu {
-                    Button("Go to folder…") { model.requestGo() }
-                    Button("Open location…") { model.chooseFolder() }
-                    Toggle("Show hidden files", isOn: $model.showHidden)
-                    Button("Refresh") { model.refresh() }
-                } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).frame(width: 24).accessibilityLabel("Folder options")
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search this Mac", text: $model.query).textFieldStyle(.plain).accessibilityLabel("Search this Mac")
-                    if !model.query.isEmpty { Button { model.query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityLabel("Clear search") }
-                }.font(.system(size: 12)).padding(9).frame(width: 280).background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 7))
-            }.buttonStyle(.borderless)
+        HStack(spacing: 10) {
             if model.query.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 5) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "internaldrive").foregroundStyle(.secondary)
                         Button("This Mac") { model.navigate(to: URL(fileURLWithPath: "/", isDirectory: true)) }
                         ForEach(ancestors, id: \.self) { url in
-                            Image(systemName: "chevron.right").font(.system(size: 8)).foregroundStyle(.tertiary)
-                            Button(url.lastPathComponent) { model.navigate(to: url) }
+                            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                            Button(url.lastPathComponent) { model.navigate(to: url) }.help(url.path)
                         }
-                    }.buttonStyle(.plain).font(.system(size: 10)).foregroundStyle(.secondary)
+                    }.buttonStyle(.link).font(.callout)
                 }
             } else {
-                HStack(spacing: 8) {
-                    Text("Search:").foregroundStyle(.secondary)
-                    Button("This Mac") { model.searchThisFolder = false }.buttonStyle(.bordered).tint(model.searchThisFolder ? .secondary : .primary)
-                    Button(model.currentFolder.lastPathComponent) { model.searchThisFolder = true }.buttonStyle(.bordered).tint(model.searchThisFolder ? .primary : .secondary)
-                    Spacer()
-                    if model.searchingSystem { ProgressView().controlSize(.mini); Text("Searching Spotlight…").foregroundStyle(.secondary) }
-                }.font(.system(size: 10)).controlSize(.small)
+                Text("Search:").foregroundStyle(.secondary)
+                Picker("Search scope", selection: $model.searchThisFolder) {
+                    Text("This Mac").tag(false)
+                    Text(model.currentFolder.lastPathComponent).tag(true)
+                }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 300)
+                Spacer()
+                if model.searchingSystem { ProgressView().controlSize(.small).help("Searching Spotlight") }
             }
-        }.padding(.horizontal, 24).padding(.top, 38).padding(.bottom, 16)
+        }.padding(.horizontal, 16).padding(.vertical, 9).background(.bar)
     }
     private var ancestors: [URL] {
         var folder = model.currentFolder; var result: [URL] = []
@@ -59,15 +41,11 @@ struct BrowserToolbar: View {
 struct BrowserView: View {
     @EnvironmentObject var model: AppModel
     @FocusState private var listFocused: Bool
+    @BrowserState private var sortOrder: [KeyPathComparator<BrowserItem>] = []
+    private var sortedItems: [BrowserItem] { sortOrder.isEmpty ? model.browserItems : model.browserItems.sorted(using: sortOrder) }
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Name"); Spacer()
-                Text(model.query.isEmpty ? "Size" : "Location").frame(width: model.query.isEmpty ? 80 : 180, alignment: .leading)
-                Text("Kind").frame(width: 85, alignment: .leading)
-                Text("Modified").frame(width: 100, alignment: .leading)
-            }.font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary).padding(.horizontal, 24).padding(.vertical, 11)
-            Divider().opacity(0.5)
+            if !model.query.isEmpty { BrowserToolbar(); Divider() }
             if let error = model.folderError, model.query.isEmpty {
                 VStack(spacing: 15) {
                     Image(systemName: "folder.badge.questionmark").font(.system(size: 35, weight: .light))
@@ -84,50 +62,46 @@ struct BrowserView: View {
                     Text(model.query.isEmpty ? "Create a folder or choose another location in the sidebar." : "Try a filename or describe the contents. Spotlight results depend on macOS indexing and permissions.").font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 430)
                 }.padding(30).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(selection: $model.selectedURL) {
-                    ForEach(model.browserItems) { item in
-                        BrowserRow(item: item, showingLocation: !model.query.isEmpty).tag(item.url)
-                            .contentShape(Rectangle()).onTapGesture(count: 2) { model.open(item) }
-                            .simultaneousGesture(TapGesture().onEnded { model.selectedURL = item.url; listFocused = true })
-                            .contextMenu {
-                                Button(item.isFolder ? "Open folder" : "Open") { model.open(item) }
-                                Button("Quick Look") { model.previewItem = item }
-                                if !model.query.isEmpty { Button("Show enclosing folder") { model.open(item, reveal: true) } }
-                                Divider()
-                                Button("Copy path") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(item.url.path, forType: .string) }
-                                Button("Commit version…") { model.prepareCommit(item) }.disabled(item.sensitive)
-                            }
+                Table(sortedItems, selection: $model.selectedURL, sortOrder: $sortOrder) {
+                    TableColumn("Name", value: \.name) { item in
+                        HStack(spacing: 6) {
+                            Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path)).resizable().frame(width: 20, height: 20)
+                            Text(item.name).lineLimit(1)
+                        }.help(item.url.path)
+                    }.width(min: 160, ideal: 320)
+                    TableColumn("Date Modified", value: \.modified) { item in
+                        Text(item.modified, format: .dateTime.month(.abbreviated).day().year()).foregroundStyle(.secondary)
+                    }.width(min: 100, ideal: 140)
+                    TableColumn(model.query.isEmpty ? "Size" : "Location") { item in
+                        if model.query.isEmpty {
+                            Text(item.isFolder ? "—" : ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file)).foregroundStyle(.secondary)
+                        } else {
+                            Text(item.url.deletingLastPathComponent().path.replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~"))
+                                .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(item.url.path)
+                        }
+                    }.width(min: 70, ideal: model.query.isEmpty ? 90 : 180)
+                    TableColumn("Kind", value: \.kind) { item in Text(item.kind).foregroundStyle(.secondary) }.width(min: 80, ideal: 100)
+                }
+                .contextMenu(forSelectionType: URL.self) { selection in
+                    if let item = model.browserItems.first(where: { selection.contains($0.url) }) {
+                        Button(item.isFolder ? "Open Folder" : "Open") { model.open(item) }
+                        Button("Quick Look") { model.previewItem = item }
+                        if !model.query.isEmpty { Button("Show Enclosing Folder") { model.open(item, reveal: true) } }
+                        Divider()
+                        Button("Copy Path") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(item.url.path, forType: .string) }
+                        Button("Commit Version…") { model.prepareCommit(item) }.disabled(item.sensitive)
                     }
-                }.listStyle(.inset).focused($listFocused).onKeyPress(.return) { model.openSelected(); return .handled }.onKeyPress(.space) { model.previewSelected(); return .handled }
-            }
-            Divider().opacity(0.5)
-            HStack {
-                Text("\(model.browserItems.count) items")
-                if !model.query.isEmpty { Text(model.searchThisFolder ? "· Folder search + semantic matches" : "· This Mac search + semantic matches"); if model.searchResultCount > 1000 { Text("· Showing the first 1,000 Spotlight matches") } }
-                Spacer()
-                Text("Return to open · Space to preview").foregroundStyle(.tertiary)
-            }.font(.system(size: 10)).foregroundStyle(.secondary).padding(.horizontal, 24).padding(.vertical, 11)
-        }
-    }
-}
+                } primaryAction: { selection in
+                    if let item = model.browserItems.first(where: { selection.contains($0.url) }) { model.open(item) }
+                }
+                .focused($listFocused)
+                .onKeyPress(.return) { model.openSelected(); return .handled }
+                .onKeyPress(.space) { model.previewSelected(); return .handled }
 
-private struct BrowserRow: View {
-    @EnvironmentObject var model: AppModel
-    let item: BrowserItem
-    let showingLocation: Bool
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path)).resizable().frame(width: 22, height: 22)
-            Text(item.name).font(.system(size: 12)).lineLimit(1)
-            Spacer(minLength: 8)
-            if showingLocation {
-                Text(item.url.deletingLastPathComponent().path.replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~")).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).frame(width: 180, alignment: .leading)
-            } else {
-                Text(item.isFolder ? "—" : ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file)).font(.system(size: 10)).foregroundStyle(.secondary).frame(width: 80, alignment: .leading)
             }
-            Text(item.kind).font(.system(size: 10)).foregroundStyle(.secondary).frame(width: 85, alignment: .leading)
-            Text(item.modified, style: .date).font(.system(size: 10)).foregroundStyle(.secondary).frame(width: 100, alignment: .leading)
-        }.padding(.vertical, 5).help(item.url.path)
+            if model.query.isEmpty { Divider(); BrowserToolbar() }
+
+        }
     }
 }
 

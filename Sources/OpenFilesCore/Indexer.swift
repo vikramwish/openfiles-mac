@@ -1,14 +1,14 @@
 import Foundation
 import NaturalLanguage
 
-private struct Candidate: Sendable {
+struct Candidate: Sendable {
     let url: URL
     let root: URL
     let stamp: FileStamp
     let project: Bool
     let prior: FileRecord?
 }
-private struct WorkResult: Sendable {
+struct WorkResult: Sendable {
     var record: FileRecord?
     var event: IndexEvent
     var statHit = false
@@ -24,7 +24,7 @@ private struct WorkResult: Sendable {
     var skipReason: String?
 }
 
-private actor IndexWorker {
+actor IndexWorker {
     let backend: any EmbeddingBackend
     let objects: EmbeddingObjects
     init(backend: any EmbeddingBackend, objects: EmbeddingObjects) { self.backend = backend; self.objects = objects }
@@ -33,7 +33,7 @@ private actor IndexWorker {
         do {
             try await control.checkpoint()
             guard try FileStamp.read(item.url) == item.stamp else { throw OpenFilesError.message("File changed after discovery") }
-            if var prior = item.prior, let meta = prior.indexMetadata, meta.stamp == item.stamp, meta.engine == backend.identifier, !meta.retryable, (prior.vector != nil || prior.sensitive) {
+            if var prior = item.prior, prior.searchTerms != nil, let meta = prior.indexMetadata, meta.stamp == item.stamp, meta.engine == backend.identifier, !meta.retryable, (prior.vector != nil || prior.sensitive) {
                 prior.url = item.url; prior.root = item.root
                 result.record = prior; result.statHit = true
                 result.event.outcome = "Unchanged"; result.event.detail = "Stat cache hit: no content read, tokenization, or inference"
@@ -53,11 +53,13 @@ private actor IndexWorker {
             }
             guard try FileStamp.read(item.url) == item.stamp else { throw OpenFilesError.message("File changed during extraction") }
             if record.sensitive {
+                record.searchTerms = []
                 record.indexMetadata = FileIndexMetadata(stamp: item.stamp, engine: backend.identifier, objectKey: nil, wordUnits: 0, inputCharacters: 0, outcome: "Sensitive", detail: "Excluded from semantic embeddings by filename/content heuristic", retryable: false)
                 result.record = record; result.skipReason = "Sensitive content"; result.event.outcome = "Sensitive"; result.event.detail = "Excluded from embeddings; file is not encrypted"
                 return result
             }
             if text.read && text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { text.detail = "Filename only: no extractable text" }
+            record.searchTerms = Array(Set(FileSearchQuery.words(text.text).prefix(6000))).sorted()
             let input = IndexText.prepare(text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? item.url.lastPathComponent : text.text)
             let key = IndexText.key(input, engine: backend.identifier), backend = self.backend
             let (object, cached) = try await objects.resolve(key, engine: backend.identifier) {

@@ -11,14 +11,16 @@ public struct FileRecord: Codable, Identifiable, Hashable, Sendable {
     public var sensitive: Bool
     public var vector: [Double]?
     public var indexMetadata: FileIndexMetadata? = nil
+    public var searchTerms: [String]? = nil
     public var name: String { url.lastPathComponent }
     public var category: String { isProject ? "Project" : FileRules.category(url) }
-    private enum CodingKeys: String, CodingKey { case id, url, root, size, modified, isProject, sensitive, vector, indexMetadata }
+    private enum CodingKeys: String, CodingKey { case id, url, root, size, modified, isProject, sensitive, vector, indexMetadata, searchTerms }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id); url = try c.decode(URL.self, forKey: .url); root = try c.decode(URL.self, forKey: .root)
         size = try c.decode(Int64.self, forKey: .size); modified = try c.decode(Date.self, forKey: .modified)
         isProject = try c.decode(Bool.self, forKey: .isProject); sensitive = try c.decode(Bool.self, forKey: .sensitive)
+        searchTerms = try c.decodeIfPresent([String].self, forKey: .searchTerms)
         vector = try c.decodeIfPresent([Double].self, forKey: .vector); indexMetadata = try c.decodeIfPresent(FileIndexMetadata.self, forKey: .indexMetadata)
     }
     public func encode(to encoder: Encoder) throws {
@@ -27,11 +29,12 @@ public struct FileRecord: Codable, Identifiable, Hashable, Sendable {
         try c.encode(size, forKey: .size); try c.encode(modified, forKey: .modified)
         try c.encode(isProject, forKey: .isProject); try c.encode(sensitive, forKey: .sensitive)
         try c.encodeIfPresent(indexMetadata, forKey: .indexMetadata)
+        try c.encodeIfPresent(searchTerms, forKey: .searchTerms)
         // New vectors live once in immutable content-addressed objects, not in every file entry.
         if indexMetadata?.objectKey == nil { try c.encodeIfPresent(vector, forKey: .vector) }
     }
-    init(id: UUID, url: URL, root: URL, size: Int64, modified: Date, isProject: Bool, sensitive: Bool, vector: [Double]?, indexMetadata: FileIndexMetadata? = nil) {
-        self.id = id; self.url = url; self.root = root; self.size = size; self.modified = modified; self.isProject = isProject; self.sensitive = sensitive; self.vector = vector; self.indexMetadata = indexMetadata
+    public init(id: UUID, url: URL, root: URL, size: Int64, modified: Date, isProject: Bool, sensitive: Bool, vector: [Double]?, indexMetadata: FileIndexMetadata? = nil, searchTerms: [String]? = nil) {
+        self.id = id; self.url = url; self.root = root; self.size = size; self.modified = modified; self.isProject = isProject; self.sensitive = sensitive; self.vector = vector; self.indexMetadata = indexMetadata; self.searchTerms = searchTerms
     }
 
 }
@@ -59,6 +62,7 @@ public struct LibraryState: Codable, Sendable {
     public var autoOrganize: Bool = false
     public var indexSettings: IndexSettings?
     public var lastIndexReport: IndexProgress?
+    public var smartCollections: [SmartCollection]?
     public init() {}
 }
 

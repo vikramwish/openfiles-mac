@@ -4,11 +4,15 @@ import Foundation
 public struct FileSearchQuery: Sendable {
     public let terms: [String]
     public let groups: [[String]]
+    private let tokenGroups: [[[String]]]
     public var text: String { terms.joined(separator: " ") }
     public init(_ input: String) {
         let stop: Set<String> = ["find", "search", "show", "look", "looking", "for", "me", "my", "all", "the", "a", "an", "of", "to", "please", "files", "file", "documents", "document", "related", "about", "containing", "named", "with", "that", "are", "can", "you", "i", "need"]
         let words = Self.words(input)
-        let meaningful = words.filter { !stop.contains($0) }
+        let filenameWords: Set<String>
+        if let range = input.range(of: #"[\w-]+\.[a-zA-Z0-9]{1,8}\b"#, options: .regularExpression) { filenameWords = Set(Self.words(String(input[range]))) }
+        else { filenameWords = [] }
+        let meaningful = words.filter { !stop.contains($0) || filenameWords.contains($0) }
         terms = Array(NSOrderedSet(array: meaningful).array as? [String] ?? meaningful)
         groups = terms.map { term in
             switch term {
@@ -22,6 +26,7 @@ public struct FileSearchQuery: Sendable {
             default: return [term]
             }
         }
+        tokenGroups = groups.map { $0.map(Self.words) }
     }
     public static func words(_ text: String) -> [String] {
         text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
@@ -33,6 +38,11 @@ public struct FileSearchQuery: Sendable {
         let lower = text.lowercased()
         let count = groups.filter { group in group.contains { $0.contains(".") ? lower.contains($0) : words.contains($0) } }.count
         return Double(count) / Double(groups.count)
+    }
+    public func coverage(words: Set<String>) -> Double {
+        guard !groups.isEmpty else { return 0 }
+        let hits = tokenGroups.filter { group in group.contains { alias in alias.allSatisfy { words.contains($0) } } }.count
+        return Double(hits) / Double(groups.count)
     }
     public static func allows(_ url: URL) -> Bool {
         let excluded: Set<String> = ["library", "node_modules", "site-packages", "__pycache__", "deriveddata", "pods", "carthage", "vendor", "venv", "env", "dist", "build", "indexobjects"]
