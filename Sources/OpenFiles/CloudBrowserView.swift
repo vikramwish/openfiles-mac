@@ -11,69 +11,75 @@ struct CloudBrowserView: View {
     @CloudViewState private var showingSearch = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                Picker("Storage provider", selection: Binding(get: { model.provider }, set: { model.selectProvider($0) })) {
-                    ForEach(CloudProvider.allCases) { provider in Text(provider.displayName).tag(provider) }
-                }.pickerStyle(.segmented).frame(width: 330).disabled(model.disconnecting)
-                Spacer()
-                if model.connected {
-                    Button("Search cloud…") { showingSearch = true }
-                    Label(model.connectedForWriting ? "Connected · Uploads enabled" : "Connected · Read only", systemImage: "checkmark.circle").font(.system(size: 11)).foregroundStyle(.secondary)
-                    Button("Connection settings") { model.showingRegistration.toggle() }.controlSize(.small)
-                }
-            }
-
-            Text("Select a supported file to preview a temporary downloaded copy, or save a local copy. Pairing a folder authorizes transfers of its filenames and contents, including subfolders. Deletions remain manual.")
-                .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-
-            if !model.connected || model.showingRegistration { registration }
-            if model.connected {
-                if model.connectedForWriting {
-                    DisclosureGroup("Uploads and folder sync", isExpanded: $showingSync) { syncControls.padding(.top, 8) }
-                        .font(.callout)
-                }
-            }
-
-            if let error = model.error {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "exclamationmark.circle")
-                    Text(error).textSelection(.enabled)
-                    Spacer()
-                    if model.connected { Button("Retry") { model.refresh() }.disabled(model.loading) }
-                }.font(.system(size: 12)).padding(12).background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
-            }
-
-            if model.connected {
-                HStack(spacing: 0) {
-                    browser.frame(minHeight: 200, maxHeight: .infinity)
-                    if let item = model.previewItem {
-                        Divider()
-                        CloudPreviewView(model: model, item: item).frame(width: 330)
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack {
+                        Picker("Storage provider", selection: Binding(get: { model.provider }, set: { model.selectProvider($0) })) {
+                            ForEach(CloudProvider.allCases) { provider in Text(provider.displayName).tag(provider) }
+                        }.pickerStyle(.segmented).frame(width: 330).disabled(model.disconnecting)
+                        Spacer()
+                        if model.connected {
+                            Button("Search cloud…") { showingSearch = true }
+                            Label(model.connectedForWriting ? "Connected · Uploads enabled" : "Connected · Read only", systemImage: "checkmark.circle").font(.system(size: 11)).foregroundStyle(.secondary)
+                            Button("Connection settings") { model.showingRegistration.toggle() }.controlSize(.small)
+                        }
                     }
-                }
-            }
-            else if model.loadingConfiguration { ProgressView("Reading saved connection…").frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else { disconnected }
 
-            VStack(alignment: .leading, spacing: 8) {
-                if model.downloading {
-                    HStack { ProgressView().controlSize(.small); Text("Downloading \(model.downloadName)…").lineLimit(1); Spacer(); Button("Cancel download") { model.cancelDownload() } }
+                    Text("Select a supported file to preview a temporary downloaded copy, or save a local copy. Pairing a folder authorizes transfers of its filenames and contents, including subfolders. Deletions remain manual.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+
+                    if !model.connected || model.showingRegistration { registration }
+                    if model.connected {
+                        if model.connectedForWriting {
+                            DisclosureGroup("Uploads and folder sync", isExpanded: $showingSync) { syncControls.padding(.top, 8) }
+                                .font(.callout)
+                        }
+                    }
+
+                    if let error = model.error {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "exclamationmark.circle")
+                            Text(error).textSelection(.enabled)
+                            Spacer()
+                            if model.connected { Button("Retry") { model.refresh() }.disabled(model.loading) }
+                        }.font(.system(size: 12)).padding(12).background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+                    }
+
+                    if model.connected {
+                        // Give the nested List a bounded viewport inside the setup scroll view.
+                        HStack(spacing: 0) {
+                            browser
+                            if let item = model.previewItem {
+                                Divider()
+                                CloudPreviewView(model: model, item: item).frame(width: 330)
+                            }
+                        }.frame(height: max(260, geometry.size.height - 310))
+                    }
+                    else if model.loadingConfiguration { ProgressView("Reading saved connection…").frame(maxWidth: .infinity, minHeight: 160) }
+                    else { disconnected }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        if model.downloading {
+                            HStack { ProgressView().controlSize(.small); Text("Downloading \(model.downloadName)…").lineLimit(1); Spacer(); Button("Cancel download") { model.cancelDownload() } }
+                        }
+                        if model.uploading {
+                            HStack { ProgressView().controlSize(.small); Text("Uploading selected files…"); Spacer(); Button("Cancel upload") { model.cancelUpload() } }
+                        }
+                        if model.syncing {
+                            HStack { ProgressView().controlSize(.small); Text("Working on the paired folders…"); Spacer(); Button("Cancel sync") { model.cancelSync() } }
+                        }
+                        HStack(alignment: .top) {
+                            Text(model.status).textSelection(.enabled)
+                            Spacer()
+                            if model.downloadedURL != nil { Button("Show saved copy") { model.revealDownload() } }
+                        }
+                    }.font(.system(size: 11)).foregroundStyle(.secondary)
                 }
-                if model.uploading {
-                    HStack { ProgressView().controlSize(.small); Text("Uploading selected files…"); Spacer(); Button("Cancel upload") { model.cancelUpload() } }
-                }
-                if model.syncing {
-                    HStack { ProgressView().controlSize(.small); Text("Working on the paired folders…"); Spacer(); Button("Cancel sync") { model.cancelSync() } }
-                }
-                HStack(alignment: .top) {
-                    Text(model.status).textSelection(.enabled)
-                    Spacer()
-                    if model.downloadedURL != nil { Button("Show saved copy") { model.revealDownload() } }
-                }
-            }.font(.system(size: 11)).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 30).padding(.vertical, 20)
+            }
         }
-        .padding(.horizontal, 30).padding(.bottom, 20)
         .task { model.activate() }
         .onDisappear { model.deactivate() }
         .onChange(of: model.provider) { showingSync = false }
@@ -135,6 +141,13 @@ struct CloudBrowserView: View {
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                 }.padding(.top, 10)
             }.disabled(model.connectionBusy)
+
+            if !model.connectionBusy && model.clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("To enable Connect, enter the OAuth client ID for this provider in App registration above.")
+                    .font(.callout).foregroundStyle(.secondary)
+                Link("Open cloud setup instructions", destination: URL(string: "https://github.com/vikramwish/openfiles/blob/main/docs/CLOUD_STORAGE.md#register-the-applications")!)
+                    .font(.callout)
+            }
 
             HStack {
                 if model.authenticating {
@@ -248,7 +261,7 @@ struct CloudBrowserView: View {
             Text(model.authenticating ? "Waiting for sign-in" : "Your cloud files, in OpenFiles").font(.system(size: 17, weight: .medium))
             Text("Connect one account per provider to browse folders and save local copies. Enable write access to upload files and pair a folder for two-way sync. No provider sync app is required.")
                 .font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 420)
-        }.padding(25).frame(maxWidth: .infinity, maxHeight: .infinity)
+        }.padding(25).frame(maxWidth: .infinity)
     }
 
     private func activate(_ item: CloudItem) {

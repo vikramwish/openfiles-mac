@@ -485,6 +485,7 @@ extension CloudBrowserModel {
     func cancelUpload() { uploadTask?.cancel() }
 
     private func loadSyncPair() {
+        guard allowsConnections else { return }
         let selectedProvider = provider
         Task {
             do {

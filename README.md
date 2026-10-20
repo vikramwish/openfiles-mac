@@ -201,12 +201,24 @@ One teammate can own SwiftUI and workflow design while the other extends the cor
 
 ## Safe UI smoke testing
 
-After `make build`, create a disposable directory under `/private/tmp` and run the executable with `OPENFILES_UI_SMOKE_ROOT` set to that directory. `OPENFILES_UI_SMOKE_SECTION` selects `home`, `collections`, `packs`, `protection`, or `history`. This mode uses only `<fixture>/app-state`, bypasses default home discovery, search registration, background indexing, and automatic protection polling. Invalid fixture paths fail closed.
+After `make build`, create a disposable directory under `/private/tmp` and run the executable with `OPENFILES_UI_SMOKE_ROOT` set to that directory. `OPENFILES_UI_SMOKE_SECTION` selects `home`, `collections`, `packs`, `protection`, `history`, `photos`, or `cloud`. This mode uses only `<fixture>/app-state`, bypasses default home discovery, search registration, background indexing, and automatic protection polling. Cloud connections and saved pairing reads are disabled, including when switching providers. Invalid fixture paths fail closed.
 
 ```sh
 mkdir -p /private/tmp/openfiles-ui-fixture
 OPENFILES_UI_SMOKE_ROOT=/private/tmp/openfiles-ui-fixture OPENFILES_UI_SMOKE_SECTION=home build/OpenFiles.app/Contents/MacOS/OpenFiles
 ```
+
+To investigate a blank or frozen Cloud screen, quit the normal app, build the current branch, then launch an isolated Cloud window:
+
+```sh
+make build
+cloud_fixture="$(mktemp -d /private/tmp/openfiles-cloud-fixture.XXXXXX)"
+OPENFILES_UI_SMOKE_ROOT="$cloud_fixture" OPENFILES_UI_SMOKE_SECTION=cloud build/OpenFiles.app/Contents/MacOS/OpenFiles
+```
+
+Check **Cloud storage**, **Google Drive**, and **OneDrive** in the sidebar, switch the provider picker, expand/collapse App registration, and resize the window to its minimum size. The selected sidebar row should remain selected and setup controls should remain reachable by scrolling. This checks navigation and layout; sign-in, remote listings, and transfers require a separate normal launch.
+
+If either launch freezes, use Activity Monitor → OpenFiles → **Sample Process** while it is unresponsive. If it exits, open Console → Crash Reports and find the latest OpenFiles report. Record whether the isolated Cloud launch also failed, the macOS version, and `git rev-parse --short HEAD`. The sample or crash report is needed to distinguish a UI loop from saved-account loading or other background work.
 
 ## Reviewed cleanup
 

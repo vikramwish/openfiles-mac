@@ -16,6 +16,8 @@ struct ContentView: View {
     @ViewState private var focusSearchRequest = 0
     @ObservedObject var cloudModel: CloudBrowserModel
     @ViewState private var focusedHistory: URL?
+    // The general Cloud row and provider shortcuts are distinct List selections.
+    @ViewState private var selectedCloudProviderShortcut = false
     @StateObject private var organizationSession = OrganizationSession()
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
@@ -123,7 +125,9 @@ struct ContentView: View {
     }
     private var sidebarSelection: Binding<String?> {
         Binding(get: {
-            if model.section == .cloud { return "provider:" + cloudModel.provider.rawValue }
+            if model.section == .cloud {
+                return selectedCloudProviderShortcut ? "provider:" + cloudModel.provider.rawValue : AppModel.Section.cloud.rawValue
+            }
             if model.section == .files {
                 let current = model.currentFolder.standardizedFileURL
                 if model.locations.contains(where: { $0.url.standardizedFileURL == current }) ||
@@ -134,11 +138,18 @@ struct ContentView: View {
             return model.section.rawValue
         }, set: { value in
             guard let value else { return }
-if value.hasPrefix("provider:"), let provider = CloudProvider(rawValue: String(value.dropFirst(9))) {
+            if value.hasPrefix("provider:"), let provider = CloudProvider(rawValue: String(value.dropFirst(9))) {
+                selectedCloudProviderShortcut = true
                 cloudModel.selectProvider(provider); model.section = .cloud
             }
-            else if let section = AppModel.Section(rawValue: value) { model.query = ""; model.section = section }
-            else if let url = URL(string: value) { model.navigate(to: url) }
+            else if let section = AppModel.Section(rawValue: value) {
+                selectedCloudProviderShortcut = false
+                model.query = ""; model.section = section
+            }
+            else if let url = URL(string: value) {
+                selectedCloudProviderShortcut = false
+                model.navigate(to: url)
+            }
         })
     }
     private var cloudFolder: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs", isDirectory: true) }

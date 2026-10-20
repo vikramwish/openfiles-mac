@@ -88,6 +88,7 @@ case "collections": model.section = .collections; model.selectedCollectionID = m
         case "packs": model.section = .packs
         case "protection": model.section = .protection
         case "history": model.section = .history
+        case "cloud": model.section = .cloud
         default: model.section = .home
         }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1260, height: 820),
