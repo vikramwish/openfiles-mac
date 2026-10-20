@@ -124,7 +124,8 @@ public actor CloudClient: CloudSyncRemote {
             return components.url!
         }
         // Escape the OData string literal, then encode it as one URL path value.
-        let escaped = try Self.pathComponent(query.replacingOccurrences(of: "'", with: "''"))
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        let escaped = query.replacingOccurrences(of: "'", with: "''").addingPercentEncoding(withAllowedCharacters: allowed)!
         var components = URLComponents(string: "https://graph.microsoft.com/v1.0/me/drive/root/search(q='\(escaped)')")!
         components.queryItems = [
             URLQueryItem(name: "$top", value: "100"),

@@ -613,6 +613,14 @@ private func graphSearchPages() async throws {
     try expect(requests[1].url?.absoluteString == link, "Trusted continuation changed")
     try expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer fake-access" }, "Search authentication missing")
     try await transport.finish()
+    // Search text is an OData value, not a filesystem component; punctuation and Unicode remain valid.
+    for text in [".", "..", "東京"] {
+        let (api, _, transport) = client(.oneDrive, replies: [Reply(#"{"value":[]}"#)])
+        _ = try await api.search(text)
+        let requests = await transport.recorded()
+        try expect(URLComponents(url: requests[0].url!, resolvingAgainstBaseURL: false)?.path == "/v1.0/me/drive/root/search(q='\(text)')", "Search text was interpreted as a path component")
+        try await transport.finish()
+    }
 }
 
 private func searchContinuationBoundaries() async throws {
