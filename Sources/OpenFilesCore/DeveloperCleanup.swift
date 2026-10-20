@@ -42,23 +42,25 @@ public actor DeveloperCleanupService {
     private let trash: any CleanupTrash
     private var current: DeveloperCleanupReview?
     private var protected: [URL] = []
+    private var scanRoots: [URL] = []
     public init(directory: URL, trash: any CleanupTrash = SystemCleanupTrash()) {
         appData = directory.canonical; self.trash = trash
     }
-    public func preview(scope: URL, excluding: [URL] = [], discoveryLimit: Int = 50_000, treeLimit: Int = 200_000) throws -> DeveloperCleanupReview {
+    public func preview(scope: URL, excluding: [URL] = [], discoveryLimit: Int = 50_000, treeLimit: Int = 200_000, scopes: [URL]? = nil) throws -> DeveloperCleanupReview {
         current = nil
         let scope = scope.canonical
-        try validateScope(scope)
+        scanRoots = MacScanScopes.reduce(scopes ?? [scope])
+        for root in scanRoots { try validateScope(root) }
         protected = excluding.map(\.canonical) + [appData]
         var review = DeveloperCleanupReview(id: UUID(), scope: scope)
-        let device = try info(scope).st_dev
-        var stack = [scope]
+        let devices = Set(try scanRoots.map { try info($0).st_dev })
+        var stack = Array(scanRoots.reversed())
         while let discovered = stack.popLast() {
             let url = discovered.standardizedFileURL
             try Task.checkCancellation()
             guard review.visited < min(50_000, max(1, discoveryLimit)), review.items.count < 200 else { review.limited = true; break }
             review.visited += 1
-            guard !protected.contains(where: { syncContains($0, url) }), let info = try? info(url), !isLink(info), info.st_dev == device, !cloud(url) else { review.skipped += 1; continue }
+            guard !protected.contains(where: { syncContains($0, url) }), let info = try? info(url), !isLink(info), devices.contains(info.st_dev), !cloud(url) else { review.skipped += 1; continue }
             if let category = classify(url, info: info) {
                 let overlaps = protected.contains { syncContains(url, $0) }
                 let measured = overlaps ? nil : try? measure(url, scope: scope, limit: min(200_000, max(1, treeLimit)))
@@ -198,7 +200,7 @@ public actor DeveloperCleanupService {
     private func isLink(_ value: stat) -> Bool { value.st_mode & S_IFMT == S_IFLNK }
     private func cloud(_ url: URL) -> Bool { (try? url.resourceValues(forKeys: [.isUbiquitousItemKey]).isUbiquitousItem) == true }
     private func measure(_ root: URL, scope: URL, limit: Int) throws -> DeveloperTree {
-        guard syncContains(scope, root), root.standardizedFileURL.path == root.canonical.path,
+        guard scanRoots.contains(where: { syncContains($0, root) }), hasExpectedCanonicalPath(root),
               !protected.contains(where: { syncContains(root, $0) || syncContains($0, root) }) else { throw OpenFilesError.message("Protected or redirected artifact") }
         let device = try info(root).st_dev
         var hash = SHA256(), bytes: Int64 = 0, count = 0

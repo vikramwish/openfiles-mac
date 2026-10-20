@@ -277,7 +277,7 @@ final class SearchPanelController: NSObject, NSWindowDelegate {
         window.minSize = NSSize(width: 980, height: 680); window.isReleasedWhenClosed = false
         window.delegate = self
         window.tabbingMode = .disallowed
-        window.contentView = NSHostingView(rootView: ContentView(cloudModel: cloudModel).environmentObject(workspace))
+WindowHosting.install(ContentView(cloudModel: cloudModel).environmentObject(workspace), in: window)
         workspace.showWorkspace = { [weak window] in
             guard let window else { return }
             if window.isMiniaturized { window.deminiaturize(nil) }
@@ -316,7 +316,7 @@ final class SearchPanelController: NSObject, NSWindowDelegate {
             window.isReleasedWhenClosed = false; window.center(); previewWindow = window
         }
         previewWindow?.title = item.name
-        previewWindow?.contentView = NSHostingView(rootView: FilePreview(url: item.url))
+        if let previewWindow { WindowHosting.install(FilePreview(url: item.url), in: previewWindow) }
         NSApp.activate(ignoringOtherApps: true); previewWindow?.makeKeyAndOrderFront(nil)
     }
     func shutdown() async {

@@ -50,7 +50,7 @@ struct OrganizationChecks {
         let plan = try await library.previewSemanticOrganization(home: f.home)
         checkTrue(plan.modelAvailable)
         checkEqual(plan.suggestions.count, 3)
-        checkTrue(plan.suggestions.contains { $0.source.lastPathComponent == "material.txt" && $0.topic == "Study" })
+        checkTrue(plan.suggestions.contains { $0.source.lastPathComponent == "material.txt" && $0.topic == "Lessons" })
         checkEqual(Set(plan.suggestions.map { $0.destination.path }).count, 3)
         checkTrue(plan.suggestions.contains { $0.destination.lastPathComponent == "note (2).txt" })
         for original in [a, b, sensitive, source, unsupported] { checkTrue(FileManager.default.fileExists(atPath: original.path)) }
@@ -64,14 +64,14 @@ struct OrganizationChecks {
     }
     static func staleAndSymlink() async throws {
         let f = OrganizationFixture(); defer { f.cleanup() }
-        let source = try f.write("Documents/note.txt")
+        let source = try f.write("Documents/Kyoto winter itinerary.txt")
         let library = try await f.library()
         let plan = try await library.previewSemanticOrganization(home: f.home)
         checkEqual(plan.suggestions.count, 1)
         try "Travel changed after preview".write(to: source, atomically: true, encoding: .utf8)
         let stale = try await library.applySemanticOrganization(planID: plan.id, selected: Set(plan.suggestions.map(\.id)))
         checkEqual(stale.moved, 0); checkEqual(stale.errors.count, 1)
-        _ = try f.write("Documents/note.txt")
+        _ = try f.write("Documents/Kyoto winter itinerary.txt")
         _ = try await library.scan()
         let next = try await library.previewSemanticOrganization(home: f.home)
         let outside = f.base.appendingPathComponent("Outside")
