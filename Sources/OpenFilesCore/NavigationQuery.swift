@@ -18,10 +18,11 @@ public struct NavigationQuery: Sendable {
     public var after: Date?
     public var before: Date?
     public var location: String?
+    public var photoLocation: String?
     public var grouping: FileGrouping?
     public var newestFirst = false
     public var browseAll = false
-    public var hasFilters: Bool { !extensions.isEmpty || after != nil || before != nil || location != nil || newestFirst }
+    public var hasFilters: Bool { !extensions.isEmpty || after != nil || before != nil || location != nil || photoLocation != nil || newestFirst }
     public var isEmpty: Bool { topic.terms.isEmpty && !hasFilters && !browseAll }
     public init(_ input: String, now: Date = Date(), calendar: Calendar = .current) {
         var text = input.lowercased()
@@ -53,9 +54,18 @@ public struct NavigationQuery: Sendable {
             let value = String(text[range]); location = value.components(separatedBy: "\"").dropFirst().first
             text.removeSubrange(range)
         }
+        // Explicit capture wording works for any file query; image queries also accept “in Sydney”.
+        let photoQuery = FileSearchQuery.words(text).contains { ["photos", "pictures", "images"].contains($0) }
+        let placePattern = photoQuery ? #"\b(?:(?:taken|captured|shot)\s+)?(?:in|near|around|at)\s+([\p{L}][\p{L} .'-]*)$"# : #"\b(?:taken|captured|shot)\s+(?:in|near|around|at)\s+([\p{L}][\p{L} .'-]*)$"#
+        if let expression = try? NSRegularExpression(pattern: placePattern),
+           let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+           let range = Range(match.range(at: 1), in: text), let whole = Range(match.range, in: text) {
+            photoLocation = String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+            text.removeSubrange(whole)
+        }
         let kinds: [(String, Set<String>)] = [
             ("pdfs", ["pdf"]), ("pdf", ["pdf"]),
-            ("images", ["png", "jpg", "jpeg", "heic", "heif", "tif", "tiff", "gif", "bmp", "svg", "webp"]), ("pictures", ["png", "jpg", "jpeg", "heic", "heif", "tif", "tiff", "gif", "bmp", "webp"]), ("photos", ["png", "jpg", "jpeg", "heic", "gif", "webp"]),
+            ("images", ["png", "jpg", "jpeg", "heic", "heif", "tif", "tiff", "gif", "bmp", "svg", "webp"]), ("pictures", ["png", "jpg", "jpeg", "heic", "heif", "tif", "tiff", "gif", "bmp", "webp"]), ("photos", ["png", "jpg", "jpeg", "heic", "heif", "tif", "tiff", "gif", "bmp", "webp"]),
             ("spreadsheets", ["xlsx", "xls", "csv", "numbers"]), ("presentations", ["ppt", "pptx", "key"]),
             ("videos", ["mov", "mp4", "m4v", "avi"]), ("audio", ["mp3", "wav", "m4a", "aiff", "flac"]),
             ("archives", ["zip", "gz", "tar", "dmg"])
@@ -72,6 +82,7 @@ public struct NavigationQuery: Sendable {
     }
     public func accepts(_ file: FileRecord) -> Bool {
         if !extensions.isEmpty && !extensions.contains(file.url.pathExtension.lowercased()) { return false }
+        if let photoLocation, file.sensitive || file.imageContent?.location?.matches(photoLocation) != true { return false }
         if let after, file.modified < after { return false }
         if let before, file.modified >= before { return false }
         if let location, !file.url.deletingLastPathComponent().pathComponents.contains(where: { $0.localizedCaseInsensitiveCompare(location) == .orderedSame }) { return false }
@@ -116,12 +127,19 @@ public final class SearchCatalog: @unchecked Sendable {
         if !file.sensitive, let visual = file.imageContent { state.visualWords[path] = visual.subjectTerms }
         state.names[path] = file.name.lowercased()
         state.nameWords[path] = names; state.documentWords[path] = words
-        let metadata = Set(["#ext:" + file.url.pathExtension.lowercased()] + file.url.deletingLastPathComponent().pathComponents.map { "#folder:" + $0.lowercased() })
+        let metadata = Self.metadataTerms(file)
         for term in words.union(metadata) { state.postings[term, default: []].insert(path) }
+    }
+    private static func metadataTerms(_ file: FileRecord) -> Set<String> {
+        var terms = Set(["#ext:" + file.url.pathExtension.lowercased()] + file.url.deletingLastPathComponent().pathComponents.map { "#folder:" + $0.lowercased() })
+        if !file.sensitive, let place = file.imageContent?.location {
+            terms.formUnion(place.searchKeys.map { "#place:" + $0 })
+        }
+        return terms
     }
     private func remove(_ path: String) {
         guard let file = state.files.removeValue(forKey: path) else { return }
-        let metadata = Set(["#ext:" + file.url.pathExtension.lowercased()] + file.url.deletingLastPathComponent().pathComponents.map { "#folder:" + $0.lowercased() })
+        let metadata = Self.metadataTerms(file)
         let words = state.documentWords.removeValue(forKey: path) ?? []
         state.visualWords.removeValue(forKey: path)
         state.names.removeValue(forKey: path); state.nameWords.removeValue(forKey: path)
@@ -130,7 +148,7 @@ public final class SearchCatalog: @unchecked Sendable {
             if state.postings[term]?.isEmpty == true { state.postings.removeValue(forKey: term) }
         }
     }
-    public func matches(_ input: String, now: Date = Date(), vector: [Double]? = nil, engine: String? = nil, limit: Int = 100) -> [FileSearchMatch] {
+    public func matches(_ input: String, now: Date = Date(), vector: [Double]? = nil, engine: String? = nil, acceptsLegacyVectors: Bool = true, limit: Int = 100) -> [FileSearchMatch] {
         let plan = NavigationQuery(input, now: now)
         guard !plan.isEmpty, limit > 0 else { return [] }
         let phrase = plan.topic.text
@@ -164,15 +182,20 @@ public final class SearchCatalog: @unchecked Sendable {
             let paths = snapshot.postings["#folder:" + location] ?? []
             candidates = candidates.map { $0.intersection(paths) } ?? paths
         }
+        if let place = plan.photoLocation {
+            let paths = snapshot.postings["#place:" + PhotoLocation.normalized(place)] ?? []
+            candidates = candidates.map { $0.intersection(paths) } ?? paths
+        }
         let paths = candidates ?? Set(snapshot.files.keys)
         func evaluate(_ path: String) -> (path: String, match: FileSearchMatch)? {
             guard let file = snapshot.files[path] else { return nil }
+            if let place = plan.photoLocation, file.sensitive || file.imageContent?.location?.matches(place) != true { return nil }
             if let after = plan.after, file.modified < after { return nil }
             if let before = plan.before, file.modified >= before { return nil }
-            if plan.topic.terms.isEmpty { return (path, FileSearchMatch(file: file, score: 1, reason: "Metadata filter")) }
+            if plan.topic.terms.isEmpty { return (path, FileSearchMatch(file: file, score: 1, reason: plan.photoLocation != nil ? "Photo location metadata" : "Metadata filter")) }
             let nameScore = plan.topic.coverage(words: snapshot.nameWords[path] ?? [])
             let similarity = vector.flatMap { query in file.vector.map { document in
-                file.sensitive || (file.indexMetadata != nil && file.indexMetadata?.engine != engine) ? 0 : VectorMath.cosine(query, document)
+                file.sensitive || (file.indexMetadata.map { $0.engine != engine } ?? !acceptsLegacyVectors) ? 0 : VectorMath.cosine(query, document)
             } } ?? 0
             let coverage = plan.topic.coverage(words: snapshot.documentWords[path] ?? [])
             let score: Double

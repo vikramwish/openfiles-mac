@@ -162,7 +162,7 @@ public actor FileLibrary {
             guard generation == embeddingGeneration else { return [] }
             if let vector { if queryCache.count >= 32 { queryCache.removeAll(keepingCapacity: true) }; queryCache[q] = vector }
         }
-        return searchCatalog.matches(input, vector: vector, engine: backend.identifier)
+        return searchCatalog.matches(input, vector: vector, engine: backend.identifier, acceptsLegacyVectors: backend.acceptsLegacyVectors)
     }
     public func saveSmartCollection(_ query: String) throws -> [SmartCollection] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -52,7 +52,7 @@ struct BrowserView: View {
                     Text("This folder isn’t accessible").font(.headline)
                     Text(error).font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     Text("macOS may require folder access or Full Disk Access for protected locations.").font(.system(size: 11)).foregroundStyle(.secondary)
-                    HStack { Button("Try again") { model.reloadFolder() }; Button("Go Home") { model.navigate(to: FileManager.default.homeDirectoryForCurrentUser) } }.buttonStyle(.bordered)
+                    HStack { Button("Try again") { model.reloadFolder() }; Button("Open Home folder") { model.navigate(to: FileManager.default.homeDirectoryForCurrentUser) } }.buttonStyle(.bordered)
                 }.padding(36).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.loadingFolder && model.query.isEmpty { ProgressView("Opening folder…").frame(maxWidth: .infinity, maxHeight: .infinity) }
             else if model.browserItems.isEmpty {
@@ -89,7 +89,7 @@ struct BrowserView: View {
                         if !model.query.isEmpty { Button("Show Enclosing Folder") { model.open(item, reveal: true) } }
                         Divider()
                         Button("Copy Path") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(item.url.path, forType: .string) }
-                        Button("Commit Version…") { model.prepareCommit(item) }.disabled(item.sensitive)
+                        Button("Save version…") { model.prepareCommit(item) }.disabled(item.sensitive)
                     }
                 } primaryAction: { selection in
                     if let item = model.browserItems.first(where: { selection.contains($0.url) }) { model.open(item) }

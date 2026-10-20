@@ -1,9 +1,12 @@
 import SwiftUI
 import OpenFilesCloud
 
+private typealias CloudViewState<Value> = SwiftUI.State<Value>
+
 @MainActor
 struct CloudBrowserView: View {
     @ObservedObject var model: CloudBrowserModel
+    @CloudViewState private var showingSyncReport = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -13,14 +16,15 @@ struct CloudBrowserView: View {
                 }.pickerStyle(.segmented).frame(width: 330).disabled(model.disconnecting)
                 Spacer()
                 if model.connected {
-                    Label("Connected · Read only", systemImage: "checkmark.circle").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Label(model.connectedForWriting ? "Connected · Uploads enabled" : "Connected · Read only", systemImage: "checkmark.circle").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             }
 
-            Text("OpenFiles reads folder names and file metadata from the account you connect. File contents download only when you choose Save copy. Remote files stay out of automatic indexing, organization, and version history.")
+            Text("Browse cloud files, save local copies, or enable uploads and sync. Pairing a folder authorizes transfers of its filenames and contents, including subfolders. Deletions remain manual; cloud browsing stays separate from local indexing.")
                 .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
             registration
+            if model.connected && model.connectedForWriting { syncControls }
 
             if let error = model.error {
                 HStack(alignment: .top, spacing: 10) {
@@ -39,6 +43,12 @@ struct CloudBrowserView: View {
                 if model.downloading {
                     HStack { ProgressView().controlSize(.small); Text("Downloading \(model.downloadName)…").lineLimit(1); Spacer(); Button("Cancel download") { model.cancelDownload() } }
                 }
+                if model.uploading {
+                    HStack { ProgressView().controlSize(.small); Text("Uploading selected files…"); Spacer(); Button("Cancel upload") { model.cancelUpload() } }
+                }
+                if model.syncing {
+                    HStack { ProgressView().controlSize(.small); Text("Working on the paired folders…"); Spacer(); Button("Cancel sync") { model.cancelSync() } }
+                }
                 HStack(alignment: .top) {
                     Text(model.status).textSelection(.enabled)
                     Spacer()
@@ -49,6 +59,55 @@ struct CloudBrowserView: View {
         .padding(.horizontal, 30).padding(.bottom, 20)
         .task { model.activate() }
         .onDisappear { model.deactivate() }
+        .sheet(isPresented: Binding(get: { model.syncPlan != nil }, set: { if !$0 { model.dismissSyncPreview() } })) {
+            if let plan = model.syncPlan {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Review two-way sync").font(.title2)
+                    Text("\(plan.pair.localRoot.path) ↔ \(plan.pair.remoteFolderName)").font(.caption).textSelection(.enabled)
+                    Text("Changed files are rechecked before transfer. Local replacements retain backups. Conflicts are reported without overwriting either copy; deletions are never propagated.").font(.caption).foregroundStyle(.secondary)
+                    if plan.changes.isEmpty { Text("The paired folders are up to date.").padding() }
+                    List(plan.changes) { action in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(action.path).font(.headline)
+                            Text(action.kind.rawValue).foregroundStyle(action.kind == .conflict ? Color.orange : Color.secondary)
+                            if !action.detail.isEmpty { Text(action.detail).font(.caption).foregroundStyle(.secondary) }
+                        }
+                    }
+                    HStack { Spacer(); Button("Cancel") { model.dismissSyncPreview() }; Button("Apply sync") { model.applySync() }.buttonStyle(.borderedProminent).disabled(model.transferBusy || plan.changes.isEmpty) }
+                }.padding(24).frame(width: 640, height: 500)
+            }
+        }
+        .sheet(isPresented: $showingSyncReport) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Sync conflicts").font(.title2)
+                Text("Resolve competing edits manually, then preview again. For a missing file, restore it manually or remove it from both sides. Removing and recreating the pairing resets its baseline.").font(.caption)
+                List(model.syncIssues, id: \.self) { Text($0).textSelection(.enabled) }
+                HStack { Button("Show local backups") { model.showSyncBackups() }; Spacer(); Button("Done") { showingSyncReport = false } }
+            }.padding(24).frame(width: 620, height: 440)
+        }
+    }
+
+    private var syncControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Button("Upload files…") { model.uploadFiles() }.disabled(model.transferBusy)
+                if model.syncPair == nil {
+                    Button("Pair local folder…") { model.chooseSyncFolder() }.disabled(model.transferBusy)
+                } else {
+                    Button("Preview sync") { model.previewSync() }.disabled(model.transferBusy)
+                    Button("Remove pairing") { model.removeSyncPair() }.disabled(model.transferBusy)
+                    Button("Local backups") { model.showSyncBackups() }
+                }
+                Spacer()
+                if !model.syncIssues.isEmpty { Button("\(model.syncIssues.count) conflicts…") { showingSyncReport = true } }
+            }.controlSize(.small)
+            if let pair = model.syncPair {
+                Text("\(pair.localRoot.path) ↔ \(pair.remoteFolderName)").font(.caption).foregroundStyle(.secondary).lineLimit(1).help(pair.localRoot.path)
+                Toggle("Sync this pairing every minute while OpenFiles is open", isOn: Binding(get: { model.automaticSync }, set: { model.setAutomaticSync($0) }))
+                    .font(.caption).toggleStyle(.checkbox)
+                Text("Automatic sync pauses on conflicts or provider changes and starts off each launch. Hidden files and symbolic links are excluded.").font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+        }
     }
 
     private var registration: some View {
@@ -65,6 +124,9 @@ struct CloudBrowserView: View {
                         SecureField("Desktop client secret, if supplied by Google", text: $model.clientSecret)
                             .textFieldStyle(.roundedBorder)
                     }
+                    Toggle("Enable uploads and two-way sync", isOn: $model.writeAccess)
+                    Text("Reconnect after changing permissions. Write access allows OpenFiles to modify files in this account; sync operates only on your explicitly paired folder.")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
                     Text("Registration details and sign-in tokens are stored in this Mac’s Keychain. Microsoft desktop apps do not need a client secret.")
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                 }.padding(.top, 10)
@@ -78,7 +140,7 @@ struct CloudBrowserView: View {
                 } else {
                     Button(model.connected ? "Save and reconnect" : "Connect \(model.provider.displayName)") { model.connect() }
                         .buttonStyle(.borderedProminent).tint(.primary)
-                        .disabled(model.connectionBusy || model.clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(model.connectionBusy || model.transferBusy || model.clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     if model.canDisconnect || model.disconnecting {
                         Button(model.disconnecting ? "Disconnecting…" : "Disconnect") { model.disconnect() }.disabled(model.connectionBusy)
                     }
@@ -128,7 +190,7 @@ struct CloudBrowserView: View {
                         .onTapGesture(count: 2) { activate(item) }
                         .contextMenu {
                             if item.isFolder { Button("Open folder") { model.openFolder(item) } }
-                            else if item.canDownload { Button("Save copy…") { model.saveCopy(item) }.disabled(model.downloading) }
+                            else if item.canDownload { Button("Save copy…") { model.saveCopy(item) }.disabled(model.transferBusy) }
                             if item.webURL != nil { Button("Open in browser") { model.openOnWeb(item) } }
                         }
                 }.listStyle(.inset)
@@ -163,7 +225,7 @@ struct CloudBrowserView: View {
                 Text(modified, style: .date).font(.system(size: 10)).foregroundStyle(.secondary).frame(width: 80, alignment: .trailing)
             }
             if item.isFolder { Button("Open") { model.openFolder(item) }.frame(width: 100) }
-            else if item.canDownload { Button("Save copy…") { model.saveCopy(item) }.disabled(model.downloading).frame(width: 100) }
+            else if item.canDownload { Button("Save copy…") { model.saveCopy(item) }.disabled(model.transferBusy).frame(width: 100) }
             else if item.webURL != nil { Button("Open in browser") { model.openOnWeb(item) }.frame(width: 100) }
         }.padding(.vertical, 5).buttonStyle(.borderless)
     }
@@ -172,7 +234,7 @@ struct CloudBrowserView: View {
         VStack(spacing: 12) {
             Image(systemName: "cloud").font(.system(size: 34, weight: .ultraLight)).foregroundStyle(.secondary)
             Text(model.authenticating ? "Waiting for sign-in" : "Your cloud files, in OpenFiles").font(.system(size: 17, weight: .medium))
-            Text("Connect one account per provider to browse folders and save local copies. No sync app is required. Uploads, editing online, and background sync are not included.")
+            Text("Connect one account per provider to browse folders and save local copies. Enable write access to upload files and pair a folder for two-way sync. No provider sync app is required.")
                 .font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 420)
         }.padding(25).frame(maxWidth: .infinity, maxHeight: .infinity)
     }

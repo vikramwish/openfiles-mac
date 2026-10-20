@@ -1,6 +1,6 @@
 # OpenFiles
 
-A native macOS file search utility with a Spotlight-style search panel, local document ranking, and optional browsing, organization, and version history. Built with **SwiftUI**, Foundation, NaturalLanguage, PDFKit, and CryptoKit. Search is available over other apps with ⌘⇧Space; the native file browser is available when you need it.
+A native macOS document assistant with fast local search, reviewable document packs, automatic saved-file history, browsing, and organization. Built with **SwiftUI**, Foundation, NaturalLanguage, PDFKit, and CryptoKit. Search is available over other apps with ⌘⇧Space; the native file browser is available when you need it.
 
 ## Run
 
@@ -39,9 +39,23 @@ Download a compatible checkpoint first, then open **Indexing activity → Search
 
 See [docs/EMBEDDINGGEMMA.md](docs/EMBEDDINGGEMMA.md) for model download commands, how retrieval works, cache compatibility, and the optional real-model check. Filename/Spotlight search and the existing relevance rules continue to apply: similarity boosts matches with filename/document evidence.
 
+## Home and document packs
+
+OpenFiles opens Home with three starting points: **Find something**, **Prepare documents**, and **Recover a version**. The menu bar and sidebar keep all three available.
+
+**Prepare documents** creates a local checklist from Rental application, Expense claim, Travel documents, or a custom template. Edit the title, requirements, instructions, and search words; comma-separated search words act as alternatives. Suggestions show their matching evidence and never attach files automatically. Choose files manually for sensitive or unindexed documents.
+
+Review each attached file in its preview, then choose **Mark as reviewed**. **Export copies…** creates a new folder with verified copies and a checklist that clearly lists missing required and omitted optional items. Export refuses unreviewed, missing, changed, linked, or cloud-placeholder files and cleans up a failed export. Originals stay in place. Review copies before sharing; exports include whole files without automatic redaction. Templates are editable starting points, not official requirements or checks of legal validity or expiry. Checklist metadata is local, private-permission JSON, not encrypted storage.
+
+## Automatic versions
+
+Choose **Automatic versions → Choose files or folders…** to opt important saved files or small folders into local history. Checks run every 30 seconds while OpenFiles is running, after a brief saving quiet period; unchanged contents are skipped. Use **Check now**, pause individual locations or all protection, or stop protecting a location. Stopping keeps existing versions. Open a location’s versions to review and restore earlier work.
+
+Folders are complete snapshots. Each selection is limited to 100 MB and 2,000 entries; up to 20 locations can be selected. Hidden/generated items, symbolic links, indexing exclusions, cloud placeholders, and potentially sensitive content can prevent a snapshot, with the reason shown beside the location. Automatic history keeps up to 20 automatic versions per location within a shared 1 GB payload allowance; manual versions are preserved. Storage accounting uses the captured payload. Protection captures saved bytes, runs only while the app is open, and provides local history rather than an independent backup.
+
 ## Quick search
 
-OpenFiles launches as a compact floating search panel. Press **⌘⇧Space** from any app to toggle it, or choose **Search files…** from the OpenFiles menu bar item. The shortcut uses a registered system hotkey and does not require Accessibility or Input Monitoring permissions. If another app has reserved that chord, the panel reports the conflict and menu-bar access remains available. Apple's Spotlight shortcut is unchanged.
+OpenFiles includes a compact floating search panel. Press **⌘⇧Space** from any app to toggle it, or choose **Search files…** from the OpenFiles menu bar item. The shortcut uses a registered system hotkey and does not require Accessibility or Input Monitoring permissions. If another app has reserved that chord, the panel reports the conflict and menu-bar access remains available. Apple's Spotlight shortcut is unchanged.
 
 Type a filename or a request such as `find all my australian government related files`. Results update as you type. Use **↑/↓** to select, **Return** to open, **Escape** to dismiss, and the eye button for Quick Look. Double-click also opens a result. Right-click to reveal it in the full browser; **Browse** opens the browser directly.
 
@@ -52,6 +66,12 @@ The panel shows up to 100 merged results. Its primary path uses in-memory invert
 Natural-language navigation supports type, location, relative **modification** dates, recent-first ordering, and grouping: try `PDFs in Downloads this month`, `government files grouped by folder`, or `recent images grouped by month`. Group by folder, kind, or month and select a group chip to narrow the displayed results. The bookmark button saves the query as a live smart group; relative dates are reevaluated when it is opened. Saved groups change the view, not the files.
 
 Filesystem events feed a debounced queue for create/edit/rename/delete reconciliation. Only changed files or affected directory subtrees are processed. Paused indexing queues changes; missed events, wake, launch, and a five-minute reconciliation pass catch gaps. Sync operates while OpenFiles runs, does not download cloud placeholders, and is limited to configured/discovered scopes. New default indexes are unlimited; existing user-selected limits are preserved. The panel reports indexed count and sync state.
+
+## Photo location search
+
+Use `photos taken in Sydney`, `images near Melbourne`, or `zebra photos in Sydney`. Background indexing reads embedded GPS and IPTC city, sublocation, state/province, and country names. Search uses cached place postings; it performs no geocoding requests or source-file reads. Original images are never rewritten.
+
+GPS-only named-place lookup currently covers Sydney, Melbourne, Brisbane, Perth, Adelaide, Canberra, Hobart, Darwin, Gold Coast, Newcastle, Auckland, Wellington, London, Paris, New York, San Francisco, Los Angeles, Tokyo, and Singapore. These use approximate city-centre radii (20–50 km), not administrative boundaries. Other places work when their exact names are embedded in IPTC metadata. Missing GPS/place metadata cannot be inferred from pixels, and GPS alone does not yet map countries or states. Existing image records refresh on the next indexing pass. Coordinates and place names are persisted locally in the **unencrypted** index; sensitive-classified images retain neither. Folder filters such as `photos in Pictures` retain their existing meaning. Relative dates still refer to file modification time, not EXIF capture time.
 
 ## Image-content search
 
@@ -75,9 +95,9 @@ Use **File → New Window** (⌘N) or **New Window** in the OpenFiles menu bar m
 
 ## Google Drive and OneDrive
 
-Use **Cloud storage** to connect directly to Google Drive or Microsoft OneDrive, browse remote folders, and save selected files as local copies. The providers' Mac sync apps are not required. Each connection asks for read-only access; uploads, deletion, two-way sync, and remote semantic search are not implemented. Google Workspace documents open in the provider's website.
+Use **Cloud storage** to connect directly to Google Drive or Microsoft OneDrive, browse remote folders, and save selected files as local copies. The providers' Mac sync apps are not required. Connections start read-only. Enable **uploads and two-way sync** and reconnect to upload files or pair local/cloud folders. Preview and apply sync, or opt into one-minute passes while the app runs. Conflicts pause automatic sync; deletions remain manual. Google Workspace documents open in the provider's website.
 
-You need a native OAuth app registration for each provider. Registration fields and tokens are stored in macOS Keychain. See [cloud storage setup](docs/CLOUD_STORAGE.md) for registration, permissions, account connection, and validation instructions. Remote contents are not automatically indexed, organized, or snapshotted; copies saved locally can enter the normal local indexing workflow.
+You need a native OAuth app registration for each provider. Registration fields and tokens are stored in macOS Keychain. See [cloud storage setup](docs/CLOUD_STORAGE.md) for registration, permissions, account connection, and validation instructions. Browsing does not automatically download or index remote contents. Explicitly paired folders can transfer contents in both directions; downloaded files can enter normal local indexing. Sync retains local backups before replacements.
 
 ## Organization, history, and vault
 
@@ -98,7 +118,7 @@ Create a password-protected **Private vault**, copy a file in, and lock it. Brow
 | Area | Working now | Extension work |
 | --- | --- | --- |
 | Browsing | Direct filesystem browser, default locations/volumes, history, breadcrumbs, hidden files, path navigation, Quick Look, new folders | Rename, move/copy, Trash, multi-selection, drag/drop, sorting and view modes |
-| Cloud storage | Direct Google Drive/OneDrive sign-in, paginated remote browsing, local downloads, Keychain credentials | Uploads, sync/conflict handling, multiple accounts per provider, shared drives, Workspace exports, remote search |
+| Cloud storage | Google Drive/OneDrive sign-in, browsing, downloads, chunked uploads, paired two-way sync with conflict checks and local backups, Keychain credentials | Deletion propagation, rename inference, multiple accounts per provider, shared drives, Workspace exports, remote search |
 | Search | System-wide Spotlight search plus automatic local English embeddings; bounded text/PDF extraction | Chunked index, OCR, Office parsers, multilingual models, SQLite/vector index |
 | Organization | Extension rules, exact move preview, collision refusal, content verification, optional one-minute automation | Rule editor, undo journal, filesystem events, model-based classification |
 | Sensitive files | Filename/content heuristics exclude likely matches from embeddings, snapshots, and organization; encrypted APFS vault | Reviewed sensitive-file migration, richer detection, encrypted metadata |
@@ -120,10 +140,14 @@ Local library and vault state lives in `~/Library/Application Support/OpenFiles/
 - `library.json`: organization targets, file metadata, embedding vectors, and version metadata. Normalized unique search terms from bounded document prefixes are persisted for fast lookup; full extracted text is not retained. Sensitive-classified content has no stored terms or embeddings. This index is **not encrypted**; terms, filenames, paths, and embeddings can reveal information.
 - `IndexObjects/<hash>.json`: model-versioned, content-addressed vectors and word-unit/timing metadata; extracted document text is not retained. Objects remain until future cache cleanup.
 - `Versions/<id>/`: full copies of committed files/projects. Sensitive-content checks are heuristics, not a confidentiality guarantee. Snapshots are local history, not an off-device backup.
+- `CloudSync/`: pairing metadata, SHA-256 fingerprints, remote revisions, and unencrypted backups of local files replaced by sync. Backups have no automatic retention limit; see [sync behavior and limits](docs/CLOUD_STORAGE.md#pair-and-sync-folders).
+
+- `DocumentPacks/<id>.json`: checklist titles, instructions, source paths, and review hashes; no document copies until explicit export. Metadata is not encrypted.
+- `automatic-history.json`: opted-in locations, pause/status data, and automatic-version retention receipts. Payloads use the existing `Versions/` storage.
 - `Private.sparsebundle`: AES-256 encrypted APFS disk image, 10 GB logical capacity, allocated as needed.
 - `vault-mount/`: mount point while unlocked. Vault content is accessible to the logged-in user and their processes while mounted. Passwords are not stored, logged, or passed as process arguments; there is no password recovery.
 
-Optional cloud connections use the Google Drive API and Microsoft Graph. Their OAuth tokens and registration fields live in macOS Keychain; remote listings remain in memory, and downloads go to a location you choose. See [cloud data and permissions](docs/CLOUD_STORAGE.md#data-and-permissions). Disconnect removes local authorization; provider-side revocation is managed in the provider's account settings.
+Optional cloud connections use the Google Drive API and Microsoft Graph. Their OAuth tokens and registration fields live in macOS Keychain; remote listings remain in memory, and manual downloads go to a location you choose; uploads and sync require explicit write consent and folder pairing. See [cloud data and permissions](docs/CLOUD_STORAGE.md#data-and-permissions). Disconnect removes local authorization; provider-side revocation is managed in the provider's account settings.
 
 No telemetry or automatic model download is implemented. Browsing can visit any accessible location. Spotlight search results are not persisted. Automatic semantic indexing excludes hidden files, symbolic links, common generated directories, app data, and vault content. New semantic indexes default to unlimited files, with configurable 2,000/10,000 limits; text extraction at 5 MB files / 12,000 characters; PDFs at 20 pages; embeddings at 4,000 characters. Native packages are treated as single projects. Sensitive detection cannot find every secret, especially in opaque binary formats.
 
@@ -150,3 +174,12 @@ swift run --build-system native -c release OpenFilesBenchmark --search-only --co
 - Collaboration conventions: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 One teammate can own SwiftUI and workflow design while the other extends the core services. Keep the library API as the boundary, and avoid filesystem work on the main actor. CI builds and tests on macOS for pushes and pull requests.
+
+## Safe UI smoke testing
+
+After `make build`, create a disposable directory under `/private/tmp` and run the executable with `OPENFILES_UI_SMOKE_ROOT` set to that directory. `OPENFILES_UI_SMOKE_SECTION` selects `home`, `packs`, `protection`, or `history`. This mode uses only `<fixture>/app-state`, bypasses default home discovery, search registration, background indexing, and automatic protection polling. Invalid fixture paths fail closed.
+
+```sh
+mkdir -p /private/tmp/openfiles-ui-fixture
+OPENFILES_UI_SMOKE_ROOT=/private/tmp/openfiles-ui-fixture OPENFILES_UI_SMOKE_SECTION=home build/OpenFiles.app/Contents/MacOS/OpenFiles
+```
