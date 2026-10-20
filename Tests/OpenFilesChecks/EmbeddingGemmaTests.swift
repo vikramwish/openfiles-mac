@@ -7,12 +7,15 @@ import OpenFilesMLX
 private actor RetrievalBackend: EmbeddingBackend {
     nonisolated let identifier: String
     nonisolated let displayName = "Test retrieval model"
+    nonisolated let acceptsLegacyVectors: Bool
     var documents: [String] = []
     var queries: [String] = []
     private let blockQuery: Bool
     private var continuation: CheckedContinuation<Void, Never>?
     var waiting: Bool { continuation != nil }
-    init(_ identifier: String, blockQuery: Bool = false) { self.identifier = identifier; self.blockQuery = blockQuery }
+    init(_ identifier: String, blockQuery: Bool = false, acceptsLegacyVectors: Bool = false) {
+        self.identifier = identifier; self.blockQuery = blockQuery; self.acceptsLegacyVectors = acceptsLegacyVectors
+    }
     func vector(for text: String) -> [Double]? { documents.append(text); return [1, 0] }
     func queryVector(for text: String) async -> [Double]? {
         queries.append(text)
@@ -101,6 +104,10 @@ struct EmbeddingGemmaChecks {
         _ = try await restarted.load()
         let matches = await restarted.searchMatches("garden astronomy")
         checkEqual(matches.count, 1); checkEqual(matches[0].score, 2, accuracy: 0.000001)
+        let legacy = RetrievalBackend("legacy-compatible", acceptsLegacyVectors: true)
+        try await restarted.setEmbeddingBackend { legacy }
+        let compatible = await restarted.searchMatches("garden astronomy")
+        checkEqual(compatible.count, 1); checkEqual(compatible[0].score, 2.4, accuracy: 0.000001)
     }
 
     static func checkpointIdentity() async throws {
