@@ -19,8 +19,8 @@ struct OrganizationView: View {
             HStack(alignment: .top, spacing: 14) {
                 Image(systemName: "folder.badge.gearshape").font(.largeTitle).foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("A place for everything on your Mac").font(.title2.weight(.semibold))
-                    Text("Group personal files by what they contain, across folders and file types. Review the suggestions, then move only the files you select.")
+                    Text("Organize your files").font(.title2.weight(.semibold))
+                    Text("Folder suggestions use document content, image subjects, filenames, and existing locations. Review the destination and preview each file before moving it.")
                         .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -95,9 +95,12 @@ struct OrganizationView: View {
                                         VStack(alignment: .leading, spacing: 5) {
                                             Text(suggestion.source.lastPathComponent).font(.body.weight(.medium)).foregroundStyle(.primary)
                                             Text("From: " + suggestion.source.path).lineLimit(1).truncationMode(.middle).help(suggestion.source.path)
-                                            Label(suggestion.destination.path, systemImage: "arrow.turn.down.right").lineLimit(1).truncationMode(.middle).help(suggestion.destination.path)
-                                            Text(String(format: "Content similarity %.2f · lead over next topic %.2f", suggestion.similarity, suggestion.margin))
-                                            Text(suggestion.evidence).lineLimit(2)
+                                            Label(suggestion.destination.deletingLastPathComponent().path.replacingOccurrences(of: preview.destination.path + "/", with: ""), systemImage: "arrow.turn.down.right").lineLimit(1).truncationMode(.middle).help(suggestion.destination.path)
+                                            Button("Preview file…") { model.previewItem = BrowserItem(url: suggestion.source, isFolder: false, isPackage: false, size: 0, modified: .distantPast) }
+                                                .buttonStyle(.borderless).help("Preview this file without opening another app")
+                                            DisclosureGroup("Why this folder?") {
+                                                Text(suggestion.evidence)
+                                            }
                                         }.font(.caption).foregroundStyle(.secondary).padding(.vertical, 5)
                                     }.toggleStyle(.checkbox).disabled(applying || analyzing)
                                 }

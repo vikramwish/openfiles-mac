@@ -41,11 +41,36 @@ struct BrowserToolbar: View {
 struct BrowserView: View {
     @EnvironmentObject var model: AppModel
     @FocusState private var listFocused: Bool
+    @BrowserState private var showsPreview = true
     @BrowserState private var sortOrder: [KeyPathComparator<BrowserItem>] = []
     private var sortedItems: [BrowserItem] { sortOrder.isEmpty ? model.browserItems : model.browserItems.sorted(using: sortOrder) }
     var body: some View {
         VStack(spacing: 0) {
-            if !model.query.isEmpty { BrowserToolbar(); Divider() }
+            HStack(spacing: 0) {
+                BrowserToolbar()
+                Toggle(isOn: $showsPreview) { Label("Preview", systemImage: "rectangle.trailinghalf.inset.filled") }
+                    .toggleStyle(.button).help("Show or hide the inline file preview").padding(.trailing, 12)
+            }.background(.bar)
+            Divider()
+            GeometryReader { geometry in
+                if showsPreview {
+                    if geometry.size.width >= 680 {
+                        HSplitView {
+                            fileList.frame(minWidth: 340)
+                            InlineBrowserPreview(item: model.selectedItem).frame(minWidth: 260, idealWidth: 330, maxWidth: 480)
+                        }
+                    } else {
+                        VSplitView {
+                            fileList.frame(minHeight: 180)
+                            InlineBrowserPreview(item: model.selectedItem).frame(minHeight: 180, idealHeight: 260)
+                        }
+                    }
+                } else { fileList }
+            }
+            if model.query.isEmpty { Divider(); BrowserToolbar() }
+        }
+    }
+    @ViewBuilder private var fileList: some View {
             if let error = model.folderError, model.query.isEmpty {
                 VStack(spacing: 15) {
                     Image(systemName: "folder.badge.questionmark").font(.system(size: 35, weight: .light))
@@ -99,9 +124,32 @@ struct BrowserView: View {
                 .onKeyPress(.space) { model.previewSelected(); return .handled }
 
             }
-            if model.query.isEmpty { Divider(); BrowserToolbar() }
+    }
+}
 
-        }
+private struct InlineBrowserPreview: View {
+    let item: BrowserItem?
+    var body: some View {
+        VStack(spacing: 0) {
+            if let item {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.name).font(.headline).lineLimit(2).textSelection(.enabled)
+                        Text(item.isFolder ? "Folder" : ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 4)
+                }.padding(14)
+                Divider()
+                if item.isFolder && !item.isPackage {
+                    ContentUnavailableView("Folder selected", systemImage: "folder", description: Text("Open the folder to select a file to preview."))
+                } else {
+                    FilePreview(url: item.url).id(item.url).frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else {
+                ContentUnavailableView("Select a file to preview", systemImage: "doc.text.magnifyingglass", description: Text("Images, PDFs, documents, and other Quick Look formats appear here."))
+            }
+        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(nsColor: .textBackgroundColor))
     }
 }
 
