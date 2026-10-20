@@ -55,7 +55,7 @@ public enum SemanticOrganizer {
 
     static func exclusion(_ source: URL, roots: [URL], output: URL, appData: URL, excluded: [URL], folderProtection: inout [String: Bool]) -> String? {
         let fm = FileManager.default
-        guard let root = roots.filter({ FileRules.contains($0, source) }).max(by: { $0.path.count < $1.path.count }) else { return "Outside personal file scope" }
+        guard let root = roots.filter({ FileRules.contains($0, source) }).min(by: { $0.path.count < $1.path.count }) else { return "Outside personal file scope" }
         if FileRules.contains(output, source) { return "Already organized" }
         if FileRules.contains(appData, source) || excluded.contains(where: { FileRules.contains($0, source) }) { return "Excluded location" }
         guard source.standardizedFileURL.path == source.canonical.path else { return "Symbolic link" }
@@ -169,7 +169,10 @@ extension FileLibrary {
                 changed += [source, suggestion.destination]; report.moved += 1
             } catch { report.errors.append("\(suggestion.source.path): \(error.localizedDescription)") }
         }
-        if !changed.isEmpty { _ = try await synchronizeChanges(changed) }
+        if !changed.isEmpty {
+            do { _ = try await synchronizeChanges(changed) }
+            catch { report.errors.append("Files were moved, but the index needs a refresh: \(error.localizedDescription)") }
+        }
         return report
     }
 }

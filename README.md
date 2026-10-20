@@ -59,7 +59,7 @@ Use **File → New Window** (⌘N) or **New Window** in the OpenFiles menu bar m
 
 ## Organization, history, and vault
 
-Browsing/search access is separate from permission to rearrange files. In **Organize**, explicitly choose folders that may be organized, review the preview, then apply it. Only top-level files unchanged for 10 seconds are eligible. Unattended organization is disabled. An old enabled setting is turned off at startup. Each physical move requires a manual preview and Apply action; search queries and saved groups cannot invoke file operations.
+**Organize → Analyze My Files** compares existing content embeddings across nested personal folders throughout your home and added locations. It suggests content topics (Work, Study, Travel, Home, Creative, Purchases, Events, Cooking) under `~/Organized`, with source/destination paths, similarity scores, and exclusion counts. Review up to 200 suggestions per pass, select individual files, then choose **Move Selected Files**. Analysis never moves files. Filename-only embeddings, uncertain matches, sensitive files, recognized projects, and system/app folders are excluded. Only indexed content can be analyzed; indexing activity shows remaining coverage. [Organization behavior and limits](docs/ORGANIZATION.md).
 
 Select a file in **Browse files** to see **Changes** and **History** in the right panel. Write a commit message, select the changes to include, and choose **Commit selected changes**. Commits use internal storage automatically: there is no destination picker or commit sheet. Unselected edits stay in the working file and remain available for a later commit.
 

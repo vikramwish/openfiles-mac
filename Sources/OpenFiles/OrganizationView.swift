@@ -14,6 +14,7 @@ struct OrganizationView: View {
     private var topics: [String] { Array(Set(preview?.suggestions.map(\.topic) ?? [])).sorted() }
 
     var body: some View {
+        GeometryReader { geometry in
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top, spacing: 14) {
                 Image(systemName: "folder.badge.gearshape").font(.largeTitle).foregroundStyle(.tint)
@@ -92,7 +93,7 @@ struct OrganizationView: View {
                                 ForEach(preview.suggestions.filter { $0.topic == topic }) { suggestion in
                                     Toggle(isOn: Binding(get: { selection.contains(suggestion.id) }, set: { if $0 { selection.insert(suggestion.id) } else { selection.remove(suggestion.id) } })) {
                                         VStack(alignment: .leading, spacing: 5) {
-                                            Text(suggestion.source.lastPathComponent).font(.body.weight(.medium))
+                                            Text(suggestion.source.lastPathComponent).font(.body.weight(.medium)).foregroundStyle(.primary)
                                             Text("From: " + suggestion.source.path).lineLimit(1).truncationMode(.middle).help(suggestion.source.path)
                                             Label(suggestion.destination.path, systemImage: "arrow.turn.down.right").lineLimit(1).truncationMode(.middle).help(suggestion.destination.path)
                                             Text(String(format: "Content similarity %.2f · lead over next topic %.2f", suggestion.similarity, suggestion.margin))
@@ -107,13 +108,15 @@ struct OrganizationView: View {
             } else {
                 ContentUnavailableView("Organize by Content", systemImage: "square.stack.3d.up", description: Text("Find related work, study, travel, creative, home, shopping, event, and cooking files—even when they are scattered across different folders. Analysis leaves your files in place."))
             }
-        }.padding(24)
+        }.padding(24).frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+        }
         .onDisappear { analysis?.cancel() }
         .onChange(of: model.state.roots) { preview = nil; selection = [] }
     }
 
     private func analyze() {
         analyzing = true; preview = nil; selection = []
+        model.status = "Analyzing indexed content for organization…"
         let id = UUID(); analysisID = id
         analysis = Task {
             defer { if analysisID == id { analyzing = false } }
@@ -121,7 +124,8 @@ struct OrganizationView: View {
                 let result = try await model.library.previewSemanticOrganization(home: FileManager.default.homeDirectoryForCurrentUser)
                 try Task.checkCancellation()
                 preview = result
-            } catch is CancellationError { }
+                model.status = "\(result.suggestions.count) organization suggestions. Files are unchanged."
+            } catch is CancellationError { if analysisID == id { model.status = "Organization analysis cancelled. Files are unchanged." } }
             catch { model.error = error.localizedDescription }
         }
     }
