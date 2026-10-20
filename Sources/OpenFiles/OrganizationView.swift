@@ -92,12 +92,14 @@ struct OrganizationView: View {
                         Text("\(preview.deferred) more matches are waiting. Review up to 200 suggestions per pass, then analyze again.").font(.callout).foregroundStyle(.secondary)
                     }
                     DisclosureGroup("Why some files stay in place") {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(preview.skipped.keys.sorted(), id: \.self) { reason in
-                                Text("\(preview.skipped[reason] ?? 0) · \(reason)")
-                            }
-                            Text("Only files with readable content are considered. Files with unclear matches stay in their current folders.")
-                        }.font(.callout).foregroundStyle(.secondary).padding(.top, 6)
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(preview.skipped.keys.sorted(), id: \.self) { reason in
+                                    Text("\(preview.skipped[reason] ?? 0) · \(reason)")
+                                }
+                                Text("Only files with readable content are considered. Files with unclear matches stay in their current folders.")
+                            }.font(.callout).foregroundStyle(.secondary).padding(.top, 6)
+                        }.frame(maxHeight: 140)
                     }
                 }
                 if !preview.modelAvailable {
