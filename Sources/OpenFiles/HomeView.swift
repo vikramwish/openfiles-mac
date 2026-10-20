@@ -14,7 +14,6 @@ struct HomeView: View {
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14)], spacing: 14) {
                     action("Find something", detail: "A few words are enough. Search by name, topic, or date.", symbol: "magnifyingglass") { model.showSearch?() }
-                    action("Make room", detail: "Review exact duplicates and possible cleanup candidates.", symbol: "sparkles.rectangle.stack") { model.section = .cleanup }
                     action("Prepare documents", detail: "Gather a checklist of files, review them, and export copies.", symbol: "checklist") { model.section = .packs }
                     action("Recover a version", detail: "Browse saved versions and restore earlier work.", symbol: "clock.arrow.circlepath") { model.section = .history }
                 }
