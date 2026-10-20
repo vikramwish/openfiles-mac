@@ -153,4 +153,3 @@ struct NativeWindowChrome: NSViewRepresentable {
         @objc private func indexing() { parent.model.showingIndexing = true }
     }
 }
-

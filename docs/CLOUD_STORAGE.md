@@ -81,6 +81,8 @@ Sync state is stored in `~/Library/Application Support/OpenFiles/CloudSync/`:
 
 If another process changes a file during final replacement, the error may identify a retained `.openfiles-previous-…` sibling for manual recovery. Such hidden recovery files are excluded from subsequent sync.
 
+Workspace windows share one cloud session, including the selected provider, folder, connection, transfers, and sync pairing. Closing one cloud view does not cancel work displayed in another. Automatic sync can continue with all workspace windows closed while OpenFiles remains in the menu bar. Quitting cancels transfers and waits for their cleanup and sync checkpoints.
+
 ## Data and permissions
 
 - Connecting sends OAuth requests to the selected provider. Listing a folder fetches filenames, identifiers, sizes, modification dates, revisions, and provider links. Downloading retrieves file contents. Uploads transmit selected filenames and file contents; an enabled pairing authorizes these transfers recursively within the paired folder.
@@ -112,5 +114,7 @@ Before shipping, use disposable files and test accounts to check both providers:
 9. Remove a previously synced file from one side and confirm sync reports it without deleting or restoring its counterpart. Cancel a transfer, preview again, and verify it can converge without data loss.
 10. Enable automatic sync and verify a subsequent pass; introduce a conflict and confirm automatic sync pauses. Restart the app and confirm the pairing survives while automatic sync starts off.
 11. Reconnect a different account and confirm the old pairing refuses to transfer files. Confirm no remote files enter local indexing/history/organization merely by browsing.
+
+12. Open Cloud storage in two workspace windows. Confirm provider changes and transfer status agree, an active transfer cannot be started twice, and closing one window leaves the other’s transfer running. Enable automatic sync, close both windows, reopen a workspace, and confirm the same session is retained. Quit during a transfer and verify the next launch can reconcile the disposable pairing.
 
 The app remains a locally signed developer build. Distribution needs a stable signing identity, appropriate provider registration/verification, and testing of Keychain access across updates.
