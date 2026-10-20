@@ -19,3 +19,5 @@ Create a short-lived branch (`codex/<topic>` for agent changes, or your team's c
 ## Manual smoke test
 
 Start in Home without connecting a folder. Browse to a disposable fixture, test back/forward/up and Go to folder, then search this Mac for a known filename and preview it. Search for a topic, open a result, preview and apply organization, commit a file, modify it, and restore to a new copy. Test a project package, destination collision, and changed source. Create a temporary vault, import a disposable file, lock, reject a wrong password, unlock, and verify the file. Never use irreplaceable files for early feature testing.
+
+For cleanup filters, create disposable identical files with different modification dates plus an older installer/archive in a Downloads fixture. Filter by size, age, and category. Verify nonmatching duplicate copies stay visible but cannot be selected, changing filters clears selections, and estimated bytes leave one duplicate copy intact. Review the final Trash path list and confirm the retained copy is unchanged. Cloud-search smoke checks are in [cloud storage setup](docs/CLOUD_STORAGE.md#development-checks).

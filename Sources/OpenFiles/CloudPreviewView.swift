@@ -9,7 +9,7 @@ struct CloudPreviewView: View {
         VStack(spacing: 12) {
             HStack {
                 Text(item.name).font(.headline).lineLimit(1)
-                FileLocationTag(location: model.currentLocation)
+                FileLocationTag(location: model.previewLocation ?? model.currentLocation)
                 Spacer()
                 Button { model.dismissCloudPreview() } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).accessibilityLabel("Close preview")
             }
@@ -26,7 +26,7 @@ struct CloudPreviewView: View {
                 if item.webURL != nil { Button("Open in browser") { model.openOnWeb(item) } }
                 Spacer()
                 if item.canDownload { Button("Save copy…") { model.saveCopy(item) }.disabled(model.transferBusy) }
-                if model.previewError != nil { Button("Retry") { model.preview(item) } }
+                if model.previewError != nil { Button("Retry") { model.preview(item, location: model.previewLocation) } }
             }
         }.padding(12).frame(minHeight: 240, maxHeight: .infinity)
     }

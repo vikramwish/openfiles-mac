@@ -80,6 +80,60 @@ public actor CloudClient: CloudSyncRemote {
         let request = try listingRequest(folderID: folderID, pageToken: pageToken)
         let (data, _) = try await authenticatedSend(request, generation: current)
         try ensureCurrent(current)
+        return try decodePage(data)
+    }
+
+    /// Provider-indexed search across the connected account; never downloads file contents.
+    public func search(_ text: String, cursor: CloudSearchCursor? = nil) async throws -> CloudSearchPage {
+        let query = text.trimmingCharacters(in: .whitespacesAndNewlines), current = generation
+        guard !query.isEmpty, query.count <= 200, query.rangeOfCharacter(from: .controlCharacters) == nil else {
+            throw CloudError.conflict("Enter a search of 1–200 characters without control characters.")
+        }
+        if let cursor {
+            guard cursor.query == query, cursor.provider == configuration.provider, cursor.generation == current else {
+                throw CloudError.conflict("This search page expired. Search again.")
+            }
+        }
+        let initial = try searchURL(query)
+        var url = initial
+        if let token = cursor?.token {
+            if configuration.provider == .oneDrive { url = try Self.microsoftPageURL(token, searchURL: initial) }
+            else {
+                var components = URLComponents(url: initial, resolvingAgainstBaseURL: false)!
+                components.queryItems?.append(URLQueryItem(name: "pageToken", value: token))
+                url = components.url!
+            }
+        }
+        let (data, _) = try await authenticatedSend(URLRequest(url: url), generation: current)
+        try ensureCurrent(current)
+        let page = try decodePage(data, searchURL: configuration.provider == .oneDrive ? initial : nil, preserveOrder: true)
+        let next = page.nextPageToken.map { CloudSearchCursor(query: query, provider: configuration.provider, generation: current, token: $0) }
+        return CloudSearchPage(items: page.items.filter { !$0.isFolder }, next: next)
+    }
+
+    private func searchURL(_ query: String) throws -> URL {
+        if configuration.provider == .googleDrive {
+            let escaped = query.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
+            var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
+            components.queryItems = [
+                URLQueryItem(name: "q", value: "trashed = false and mimeType != 'application/vnd.google-apps.folder' and name contains '\(escaped)'"),
+                URLQueryItem(name: "pageSize", value: "100"),
+                URLQueryItem(name: "fields", value: "nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink,version,capabilities(canDownload))"),
+                URLQueryItem(name: "orderBy", value: "modifiedTime desc")
+            ]
+            return components.url!
+        }
+        // Escape the OData string literal, then encode it as one URL path value.
+        let escaped = try Self.pathComponent(query.replacingOccurrences(of: "'", with: "''"))
+        var components = URLComponents(string: "https://graph.microsoft.com/v1.0/me/drive/root/search(q='\(escaped)')")!
+        components.queryItems = [
+            URLQueryItem(name: "$top", value: "100"),
+            URLQueryItem(name: "$select", value: "id,name,size,folder,file,remoteItem,lastModifiedDateTime,webUrl,eTag")
+        ]
+        return components.url!
+    }
+
+    private func decodePage(_ data: Data, searchURL: URL? = nil, preserveOrder: Bool = false) throws -> CloudPage {
         do {
             switch configuration.provider {
             case .googleDrive:
@@ -90,22 +144,22 @@ public actor CloudClient: CloudSyncRemote {
                     return CloudItem(id: item.id, name: item.name, isFolder: folder,
                         size: item.size.flatMap(Int64.init), modified: Self.date(item.modifiedTime),
                         webURL: Self.webURL(item.webViewLink, provider: .googleDrive),
-                        canDownload: !native && item.capabilities?.canDownload != false, revision: item.version)
+                        canDownload: !native && item.capabilities?.canDownload != false, revision: item.version, mimeType: item.mimeType)
                 }
-                return CloudPage(items: Self.sorted(items), nextPageToken: response.nextPageToken?.nilIfEmpty)
+                return CloudPage(items: preserveOrder ? items : Self.sorted(items), nextPageToken: response.nextPageToken?.nilIfEmpty)
             case .oneDrive:
                 let response = try JSONDecoder().decode(MicrosoftList.self, from: data)
                 // Reject forged pagination links before a caller can offer Load more.
-                if let link = response.nextLink { _ = try Self.microsoftPageURL(link) }
+                if let link = response.nextLink { _ = try Self.microsoftPageURL(link, searchURL: searchURL) }
                 let items = response.value.map { item in
                     // Remote/shared references require a separate drive identity; do not treat them as own-drive IDs.
                     let remote = item.remoteItem != nil
                     return CloudItem(id: item.id, name: item.name, isFolder: item.folder != nil && !remote,
                         size: item.size, modified: Self.date(item.lastModifiedDateTime),
                         webURL: Self.webURL(item.webUrl, provider: .oneDrive),
-                        canDownload: item.file != nil && !remote, revision: item.eTag, etag: item.eTag)
+                        canDownload: item.file != nil && !remote, revision: item.eTag, etag: item.eTag, mimeType: item.file?.mimeType)
                 }
-                return CloudPage(items: Self.sorted(items), nextPageToken: response.nextLink?.nilIfEmpty)
+                return CloudPage(items: preserveOrder ? items : Self.sorted(items), nextPageToken: response.nextLink?.nilIfEmpty)
             }
         } catch let error as CloudError { throw error }
         catch { throw CloudError.invalidResponse }
@@ -312,12 +366,17 @@ public actor CloudClient: CloudSyncRemote {
         return encoded
     }
 
-    private static func microsoftPageURL(_ value: String) throws -> URL {
+    private static func microsoftPageURL(_ value: String, searchURL: URL? = nil) throws -> URL {
         guard let components = URLComponents(string: value), components.scheme == "https",
               components.host?.lowercased() == "graph.microsoft.com", components.port == nil || components.port == 443,
               components.user == nil, components.password == nil, components.fragment == nil,
-              components.path.hasPrefix("/v1.0/me/drive/"), components.path.hasSuffix("/children"),
-              !components.path.split(separator: "/").contains(".."), let url = components.url else { throw CloudError.unsafeURL }
+              let url = components.url else { throw CloudError.unsafeURL }
+        if let searchURL {
+            guard components.path == URLComponents(url: searchURL, resolvingAgainstBaseURL: false)?.path else { throw CloudError.unsafeURL }
+        } else {
+            guard components.path.hasPrefix("/v1.0/me/drive/"), components.path.hasSuffix("/children"),
+                  !components.path.split(separator: "/").contains("..") else { throw CloudError.unsafeURL }
+        }
         return url
     }
 
@@ -407,7 +466,7 @@ struct MicrosoftItem: Decodable {
     let folder: Facet?
     let file: Facet?
     let remoteItem: Facet?
-    struct Facet: Decodable {}
+    struct Facet: Decodable { let mimeType: String? }
 }
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }

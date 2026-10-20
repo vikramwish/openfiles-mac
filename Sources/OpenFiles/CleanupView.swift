@@ -10,6 +10,8 @@ final class CleanupModel: ObservableObject {
     @Published var scope: URL?
     @Published private(set) var review: CleanupReview?
     @Published var selected = Set<UUID>()
+    @Published var filter = CleanupFilter() { didSet { selected = [] } }
+    private var reviewDate = Date()
     @Published private(set) var busy = false
     @Published var error: String?
     @Published private(set) var result: CleanupResult?
@@ -22,8 +24,10 @@ final class CleanupModel: ObservableObject {
     }
     var selectedFiles: [CleanupFile] { review?.files.filter { selected.contains($0.id) } ?? [] }
     var selectedBytes: Int64 { selectedFiles.reduce(0) { $0 + $1.bytes } }
+    var filtered: FilteredCleanupReview? { review.map { filter.apply(to: $0, now: reviewDate) } }
     var canTrash: Bool {
-        guard !busy, !selected.isEmpty, let review else { return false }
+        guard !busy, !selected.isEmpty, let review, let filtered,
+              selected.isSubset(of: filtered.selectableIDs) else { return false }
         return review.duplicates.allSatisfy { !$0.files.allSatisfy { selected.contains($0.id) } }
     }
     func chooseFolder() {
@@ -40,6 +44,7 @@ final class CleanupModel: ObservableObject {
         guard !busy else { return }
         let chosen = scope
         busy = true; error = nil; review = nil; selected = []; result = nil
+        reviewDate = Date()
         task = Task {
             defer { busy = false }
             do {
@@ -142,9 +147,10 @@ struct CleanupView: View {
                         }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                if let review = model.review {
+                if let review = model.review, let visible = model.filtered {
+                    cleanupFilters
                     HStack {
-                        Text("\(review.duplicates.count) duplicate groups · \(review.suggestions.count) suggestions").font(.headline)
+                        Text("\(visible.duplicates.count) duplicate groups · \(visible.suggestions.count) suggestions").font(.headline)
                         Spacer()
                         Text("\(review.skipped) skipped").font(.caption).foregroundStyle(.secondary)
                     }
@@ -154,7 +160,9 @@ struct CleanupView: View {
                     }
                     Text("Nothing is selected automatically. Similarity and file age cannot tell whether a file matters to you.")
                         .font(.callout).foregroundStyle(.secondary)
-                    ForEach(review.duplicates) { group in
+                    Text("\(visible.selectableIDs.count) matching files · up to \(bytes(visible.potentialBytes)) to review, retaining one copy per duplicate group. Logical file sizes may differ from reclaimable space; moving to Trash does not immediately free space.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    ForEach(visible.duplicates) { group in
                         GroupBox {
                             VStack(alignment: .leading, spacing: 12) {
                                 HStack {
@@ -164,27 +172,27 @@ struct CleanupView: View {
                                 }
                                 Text("Keep at least one copy. Different locations may be used by apps, projects or shared folders.")
                                     .font(.caption).foregroundStyle(.secondary)
-                                ForEach(group.files) { file in fileRow(file) }
+                                ForEach(group.files) { file in fileRow(file, selectable: visible.selectableIDs.contains(file.id)) }
                                 if group.files.allSatisfy({ model.selected.contains($0.id) }) {
                                     Label("Deselect a copy to keep it.", systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
                                 }
                             }.padding(10)
                         }
                     }
-                    if review.suggestions.contains(where: { $0.kind == .screenshot }) {
+                    if visible.suggestions.contains(where: { $0.kind == .screenshot }) {
                         Text("Older screenshots").font(.title2.weight(.semibold))
                         Text("Ranked using age, recorded opens, recognized text, and newer related captures. Last-viewed history can be incomplete; review each image.")
                             .font(.callout).foregroundStyle(.secondary)
-                        ForEach(review.suggestions.filter { $0.kind == .screenshot }) { file in GroupBox { fileRow(file).padding(10) } }
+                        ForEach(visible.suggestions.filter { $0.kind == .screenshot }) { file in GroupBox { fileRow(file).padding(10) } }
                     }
-                    if review.suggestions.contains(where: { $0.kind != .screenshot }) {
+                    if visible.suggestions.contains(where: { $0.kind != .screenshot }) {
                         Text("Worth a look").font(.title2.weight(.semibold))
                         Text(review.usesEmbeddings ? "Local AI compares document contents. A newer, similar document may still contain different information." : "These suggestions use file type, folder and modification time. No AI model determined that they are unwanted.")
                             .font(.callout).foregroundStyle(.secondary)
-                        ForEach(review.suggestions.filter { $0.kind != .screenshot }) { file in GroupBox { fileRow(file).padding(10) } }
+                        ForEach(visible.suggestions.filter { $0.kind != .screenshot }) { file in GroupBox { fileRow(file).padding(10) } }
                     }
-                    if review.files.isEmpty {
-                        ContentUnavailableView("Nothing to review", systemImage: "checkmark.circle", description: Text("No eligible matches in the indexed files yet. Results grow as macOS folder access and indexing allow; use Check again to refresh."))
+                    if visible.selectableIDs.isEmpty {
+                        ContentUnavailableView("Nothing matches this review", systemImage: "line.3.horizontal.decrease.circle", description: Text("Try resetting the filters or checking again as indexing progresses."))
                     } else {
                         HStack {
                             Text("\(model.selected.count) selected · \(bytes(model.selectedBytes))").foregroundStyle(.secondary)
@@ -220,16 +228,47 @@ struct CleanupView: View {
             }.padding(26).frame(width: 580)
         }
     }
-    private func fileRow(_ file: CleanupFile) -> some View {
+    private var cleanupFilters: some View {
+        GroupBox("Narrow this review") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Picker("Minimum size", selection: $model.filter.minimumBytes) {
+                        Text("Any size").tag(Int64(0))
+                        Text("1 MB").tag(Int64(1_024 * 1_024))
+                        Text("10 MB").tag(Int64(10 * 1_024 * 1_024))
+                        Text("100 MB").tag(Int64(100 * 1_024 * 1_024))
+                    }
+                    Picker("Last modified", selection: $model.filter.olderThanDays) {
+                        Text("Any time").tag(0)
+                        Text("Over 90 days ago").tag(90)
+                        Text("Over 180 days ago").tag(180)
+                        Text("Over a year ago").tag(365)
+                    }
+                }
+                HStack {
+                    Picker("Category", selection: $model.filter.kind) {
+                        Text("All categories").tag(Optional<CleanupKind>.none)
+                        ForEach(CleanupKind.allCases, id: \.self) { Text($0.rawValue).tag(Optional($0)) }
+                    }
+                    Spacer()
+                    Button("Reset filters") { model.filter = CleanupFilter() }
+                }
+                Text("Changing filters clears your selection. All copies in a matching duplicate group remain visible for comparison; copies outside the filter cannot be selected.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }.padding(8)
+        }.disabled(model.busy)
+    }
+    private func fileRow(_ file: CleanupFile, selectable: Bool = true) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Toggle("Select \(file.url.lastPathComponent) for Trash", isOn: Binding(get: { model.selected.contains(file.id) }, set: {
                 if $0 { model.selected.insert(file.id) } else { model.selected.remove(file.id) }
-            })).labelsHidden().toggleStyle(.checkbox).disabled(model.busy)
+            })).labelsHidden().toggleStyle(.checkbox).disabled(model.busy || !selectable)
             VStack(alignment: .leading, spacing: 5) {
                 Text(file.url.lastPathComponent).font(.headline)
                 Text(file.url.path).font(.caption).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
                 Text("\(bytes(file.bytes)) · modified \(file.modified.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(.secondary)
                 Text(file.evidence).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if !selectable { Text("Outside filters · shown for comparison").font(.caption).foregroundStyle(.secondary) }
                 if let related = file.relatedURL {
                     Button("Compare with \(related.lastPathComponent)") { NSWorkspace.shared.activateFileViewerSelecting([file.url, related]) }.font(.caption)
                 }

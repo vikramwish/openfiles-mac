@@ -18,7 +18,9 @@ struct CleanupChecks {
         ("Cleanup finds byte duplicates, preserves originals during review, and keeps a retained copy", duplicates),
         ("Cleanup rejects stale selections, changed keepers, links and protected locations", safeguards),
         ("Cleanup suggestions explain age and local semantic evidence without automatic selection", suggestions),
-        ("Cleanup Trash errors preserve source files and never fall back to deletion", trashFailure)
+        ("Cleanup Trash errors preserve source files and never fall back to deletion", trashFailure),
+        ("Cleanup filters keep duplicate context and count only removable matching copies", filteredDuplicates),
+        ("Cleanup filters combine size, age, and category without changing the review", filteredSuggestions)
     ]
     private static func fixture() throws -> (URL, URL, URL) {
         let base = URL(fileURLWithPath: "/private/tmp", isDirectory: true).appendingPathComponent("OpenFilesCleanup-\(UUID())").resolvingSymlinksInPath()
@@ -132,5 +134,45 @@ struct CleanupChecks {
         let result = try await service.apply(reviewID: plan.id, selected: [plan.files.first!.id])
         checkTrue(result.receipts.isEmpty); checkEqual(result.errors.count, 1)
         checkEqual(try Data(contentsOf: a), try Data(contentsOf: b))
+    }
+    static func filteredDuplicates() async throws {
+        let (base, scope, data) = try fixture(); defer { try? FileManager.default.removeItem(at: base) }
+        let old = try write("Old.txt", in: scope), recent = try write("Recent.txt", in: scope)
+        let now = Date()
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-200 * 86_400)], ofItemAtPath: old.path)
+        let service = CleanupService(directory: data, trash: TestCleanupTrash(destination: base.appendingPathComponent("Trash")))
+        let plan = try await service.preview(files: [record(old), record(recent)], scope: scope, now: now)
+        let visible = CleanupFilter(olderThanDays: 180, kind: .duplicate).apply(to: plan, now: now)
+        checkEqual(visible.duplicates.count, 1); checkEqual(visible.duplicates[0].files.count, 2)
+        checkEqual(visible.selectableIDs.count, 1)
+        let candidate = visible.duplicates[0].files.first { visible.selectableIDs.contains($0.id) }!
+        checkEqual(candidate.url.lastPathComponent, old.lastPathComponent)
+        checkEqual(visible.potentialBytes, candidate.bytes)
+        let all = CleanupFilter().apply(to: plan, now: now)
+        checkEqual(all.selectableIDs.count, 2)
+        checkEqual(all.potentialBytes, candidate.bytes) // One keeper is required even when both match.
+        checkTrue(CleanupFilter(minimumBytes: candidate.bytes + 1).apply(to: plan).selectableIDs.isEmpty)
+        let result = try await service.apply(reviewID: plan.id, selected: visible.selectableIDs)
+        checkEqual(result.receipts.count, 1)
+        checkTrue(FileManager.default.fileExists(atPath: recent.path))
+        checkFalse(FileManager.default.fileExists(atPath: old.path))
+    }
+    static func filteredSuggestions() async throws {
+        let (base, scope, data) = try fixture(); defer { try? FileManager.default.removeItem(at: base) }
+        let archive = try write("Bundle.zip", in: scope, text: "old archive content")
+        let installer = try write("Setup.dmg", in: scope, text: "old installer")
+        let now = Date()
+        for url in [archive, installer] {
+            try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-200 * 86_400)], ofItemAtPath: url.path)
+        }
+        let service = CleanupService(directory: data, trash: FailingCleanupTrash())
+        let plan = try await service.preview(files: [record(archive), record(installer)], scope: scope, now: now)
+        let result = CleanupFilter(minimumBytes: 15, olderThanDays: 180, kind: .archive).apply(to: plan, now: now)
+        checkEqual(result.suggestions.map(\.url.lastPathComponent), [archive.lastPathComponent])
+        checkEqual(result.potentialBytes, Int64("old archive content".utf8.count))
+        checkTrue(CleanupFilter(olderThanDays: 365).apply(to: plan, now: now).selectableIDs.isEmpty)
+        checkEqual(plan.suggestions.count, 2)
+        checkTrue(FileManager.default.fileExists(atPath: archive.path))
+        checkTrue(FileManager.default.fileExists(atPath: installer.path))
     }
 }

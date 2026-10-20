@@ -38,6 +38,7 @@ final class CloudBrowserModel: ObservableObject {
     @Published private(set) var status = "Connect an account to browse its files."
     @Published private(set) var downloadedURL: URL?
     @Published private(set) var previewItem: CloudItem?
+    @Published private(set) var previewLocation: FileStorageLocation?
     @Published private(set) var cloudPreview: CloudPreview?
     @Published private(set) var previewError: String?
     @Published private(set) var previewLoading = false
@@ -78,6 +79,20 @@ final class CloudBrowserModel: ObservableObject {
 
     // A reviewed destination becomes invalid when the account or folder changes.
     var uploadDestinationID: String { "\(accountGeneration.uuidString)/\(provider.rawValue)/\(folders.last?.id ?? "root")" }
+    var connectionID: UUID { accountGeneration }
+
+    func search(_ query: String, cursor: CloudSearchCursor? = nil) async throws -> CloudSearchPage {
+        guard connected, let client else { throw CloudError.connectionRequired }
+        let account = accountGeneration
+        do {
+            let page = try await client.search(query, cursor: cursor)
+            guard account == accountGeneration, connected else { throw CancellationError() }
+            return page
+        } catch {
+            if account == accountGeneration { handleExpiredConnection(error) }
+            throw error
+        }
+    }
 
     var transferBusy: Bool { uploading || syncing || downloading }
     var connectionBusy: Bool { loadingConfiguration || authenticating || disconnecting }
@@ -366,10 +381,11 @@ final class CloudBrowserModel: ObservableObject {
 
     private func clearListing() { items = []; folders = []; nextPageToken = nil }
 
-    func preview(_ item: CloudItem) {
+    func preview(_ item: CloudItem, location: FileStorageLocation? = nil) {
         guard connected, let client else { return }
         dismissCloudPreview()
         previewItem = item; previewLoading = true; previewError = nil
+        previewLocation = location ?? currentLocation
         let generation = previewGeneration, account = accountGeneration
         previewTask = Task {
             defer { if previewGeneration == generation { previewLoading = false } }
@@ -386,7 +402,7 @@ final class CloudBrowserModel: ObservableObject {
     func dismissCloudPreview() {
         previewTask?.cancel(); previewGeneration = UUID()
         if let value = cloudPreview { Task { await previewStore.discard(value.id) } }
-        previewItem = nil; cloudPreview = nil; previewError = nil; previewLoading = false
+        previewItem = nil; previewLocation = nil; cloudPreview = nil; previewError = nil; previewLoading = false
     }
 
     func compareConflict(_ plan: CloudSyncPlan, path: String) {

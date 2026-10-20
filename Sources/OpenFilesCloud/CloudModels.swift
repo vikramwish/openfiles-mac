@@ -60,12 +60,14 @@ public struct CloudItem: Identifiable, Hashable, Codable, Sendable {
     public let canDownload: Bool
     public let revision: String?
     public let etag: String?
+    public let mimeType: String?
     public init(id: String, name: String, isFolder: Bool, size: Int64? = nil,
                 modified: Date? = nil, webURL: URL? = nil, canDownload: Bool = true,
-                revision: String? = nil, etag: String? = nil) {
+                revision: String? = nil, etag: String? = nil, mimeType: String? = nil) {
         self.id = id; self.name = name; self.isFolder = isFolder; self.size = size
         self.modified = modified; self.webURL = webURL; self.canDownload = canDownload && !isFolder
         self.revision = revision; self.etag = etag
+        self.mimeType = mimeType
     }
 }
 

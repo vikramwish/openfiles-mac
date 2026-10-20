@@ -568,6 +568,113 @@ private func locationLabels() async throws {
     try expect(FileStorageLocation.remote(provider: .oneDrive).path == "OneDrive", "Remote root needs a provider label")
 }
 
+private func googleSearchPages() async throws {
+    let (api, _, transport) = client(.googleDrive, replies: [
+        Reply(#"{"files":[{"id":"native","name":"Quarter plan","mimeType":"application/vnd.google-apps.document","webViewLink":"https://docs.google.com/document/d/native"},{"id":"pdf","name":"Quarter.pdf","mimeType":"application/pdf","size":"300"}],"nextPageToken":"page+2/="}"#),
+        Reply(#"{"files":[{"id":"last","name":"Quarter.txt","mimeType":"text/plain","size":"20"}]}"#)
+    ])
+    let query = "Quarter's \\ budget"
+    let first = try await api.search("  " + query + " ")
+    try expect(first.items.count == 2 && first.next != nil, "Search lost files or pagination")
+    try expect(!first.items[0].canDownload && first.items[0].webURL != nil, "Workspace document needs a provider link")
+    try expect(CloudSearchKind.documents.matches(first.items[0]), "Extensionless Workspace document was filtered out")
+    try await expectError({ _ = try await api.search("other", cursor: first.next) }, matching: { if case CloudError.conflict = $0 { return true }; return false })
+    let last = try await api.search(query, cursor: first.next)
+    try expect(last.items.map(\.id) == ["last"] && last.next == nil, "Second search page failed")
+    let requests = await transport.recorded()
+    let parameters = URLComponents(url: requests[0].url!, resolvingAgainstBaseURL: false)!.queryItems!
+    let expected = "trashed = false and mimeType != 'application/vnd.google-apps.folder' and name contains 'Quarter\\'s \\\\ budget'"
+    try expect(parameters.first { $0.name == "q" }?.value == expected, "Google query was not escaped as a literal")
+    try expect(!expected.contains("in parents"), "Search should not be scoped to the browsed folder")
+    let next = URLComponents(url: requests[1].url!, resolvingAgainstBaseURL: false)!.queryItems!
+    try expect(next.first { $0.name == "pageToken" }?.value == "page+2/=", "Google cursor was modified")
+    try await transport.finish()
+}
+
+private func graphSearchPages() async throws {
+    let query = "O'Brien / budget & 2026?"
+    let literal = query.replacingOccurrences(of: "'", with: "''")
+    let encoded = literal.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"))!
+    let link = "https://graph.microsoft.com/v1.0/me/drive/root/search(q='\(encoded)')?$skiptoken=next"
+    let data = try JSONSerialization.data(withJSONObject: ["value": [], "@odata.nextLink": link])
+    let (api, _, transport) = client(.oneDrive, replies: [
+        Reply(String(decoding: data, as: UTF8.self)),
+        Reply(#"{"value":[{"id":"folder","name":"Folder","folder":{}},{"id":"file","name":"budget.pdf","size":10,"file":{"mimeType":"application/pdf"}}]}"#)
+    ])
+    let first = try await api.search(query)
+    try expect(first.next != nil, "Empty search pages must retain their continuation")
+    let second = try await api.search(query, cursor: first.next)
+    try expect(second.items.map(\.id) == ["file"], "Search must exclude folders")
+    try expect(second.items[0].mimeType == "application/pdf", "File type was not retained")
+    let requests = await transport.recorded()
+    let components = URLComponents(url: requests[0].url!, resolvingAgainstBaseURL: false)!
+    try expect(components.path == "/v1.0/me/drive/root/search(q='\(literal)')", "OneDrive query lost literal characters")
+    try expect(components.queryItems?.contains { $0.name == "$top" && $0.value == "100" } == true, "Search must request bounded pages")
+    try expect(requests[1].url?.absoluteString == link, "Trusted continuation changed")
+    try expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer fake-access" }, "Search authentication missing")
+    try await transport.finish()
+}
+
+private func searchContinuationBoundaries() async throws {
+    for link in [
+        "https://evil.example/v1.0/me/drive/root/search(q='budget')",
+        "http://graph.microsoft.com/v1.0/me/drive/root/search(q='budget')",
+        "https://graph.microsoft.com/v1.0/me/drive/root/children",
+        "https://graph.microsoft.com/v1.0/me/drive/root/search(q='another')",
+        "https://graph.microsoft.com/v1.0/users/other/drive/root/search(q='budget')",
+        "https://user@graph.microsoft.com/v1.0/me/drive/root/search(q='budget')",
+        "https://graph.microsoft.com/v1.0/me/drive/root/search(q='budget')#fragment"
+    ] {
+        let body = try JSONSerialization.data(withJSONObject: ["value": [], "@odata.nextLink": link])
+        let (api, _, transport) = client(.oneDrive, replies: [Reply(String(decoding: body, as: UTF8.self))])
+        try await expectError({ _ = try await api.search("budget") }, matching: { if case CloudError.unsafeURL = $0 { return true }; return false })
+        let requests = await transport.recorded()
+        try expect(requests.count == 1, "Followed an untrusted search continuation")
+        try await transport.finish()
+    }
+    let (api, _, transport) = client(.googleDrive, replies: [Reply(#"{"files":[],"nextPageToken":"next"}"#)])
+    let page = try await api.search("budget")
+    let (other, _, otherTransport) = client(.googleDrive, replies: [])
+    try await expectError({ _ = try await other.search("budget", cursor: page.next) }, matching: { if case CloudError.conflict = $0 { return true }; return false })
+    try await api.disconnect()
+    try await expectError({ _ = try await api.search("budget", cursor: page.next) }, matching: { if case CloudError.conflict = $0 { return true }; return false })
+    try await transport.finish(); try await otherTransport.finish()
+}
+
+private func searchCancellationAndValidation() async throws {
+    let (api, _, transport) = client(.oneDrive, replies: [])
+    for query in [" ", String(repeating: "x", count: 201), "hello\u{0}world", "hello\nworld"] {
+        try await expectError({ _ = try await api.search(query) }, matching: { if case CloudError.conflict = $0 { return true }; return false })
+    }
+    try await transport.finish()
+    let (disconnected, _, empty) = client(.googleDrive, replies: [], token: nil)
+    try await expectError({ _ = try await disconnected.search("budget") }, matching: { if case CloudError.connectionRequired = $0 { return true }; return false })
+    try await empty.finish()
+    for cancelTask in [false, true] {
+        let store = MemoryStore(provider: .googleDrive, token: liveToken())
+        let paused = PausedTransport(body: #"{"files":[]}"#)
+        let api = CloudClient(configuration: .init(provider: .googleDrive, clientID: "test"), store: store, transport: paused)
+        let search = Task { try await api.search("budget") }
+        await paused.waitForRequest()
+        if cancelTask { search.cancel() } else { try await api.disconnect() }
+        await paused.resume()
+        try await expectError({ _ = try await search.value }, matching: { $0 is CancellationError })
+    }
+}
+
+private func searchFiltersAndOrdering() async throws {
+    let unknown = CloudItem(id: "unknown", name: "Unknown.pdf", isFolder: false)
+    let large = CloudItem(id: "large", name: "Large.PDF", isFolder: false, size: 100, modified: Date(timeIntervalSince1970: 20))
+    let small = CloudItem(id: "small", name: "Small.pdf", isFolder: false, size: 1, modified: Date(timeIntervalSince1970: 40))
+    let image = CloudItem(id: "image", name: "Photo", isFolder: false, mimeType: "image/jpeg")
+    let folder = CloudItem(id: "folder", name: "Folder.pdf", isFolder: true)
+    let items = [unknown, small, large, image, small, folder]
+    try expect(CloudSearchResults.visible(items, kind: .documents, sort: .largest).map(\.id) == ["large", "small", "unknown"], "Size sort must deduplicate and put unknown sizes last")
+    try expect(CloudSearchResults.visible(items, kind: .documents, sort: .newest).map(\.id) == ["small", "large", "unknown"], "Date sort must put unknown dates last")
+    try expect(CloudSearchResults.visible(items, kind: .images).map(\.id) == ["image"], "MIME-based image filter failed")
+    try expect(CloudSearchResults.visible(items).map(\.id) == ["unknown", "small", "large", "image"], "Provider ordering must be stable")
+}
+
 @main
 private struct Runner {
     static func main() async {
@@ -577,6 +684,11 @@ private struct Runner {
             ("Authorization code exchange and form encoding", authorizationCodeExchange),
             ("Google folders, native documents and pagination", googleFolderPages),
             ("OneDrive folders and pagination", graphFolderPages),
+            ("Google search escapes literal queries and paginates", googleSearchPages),
+            ("OneDrive search handles punctuation, file types, and empty pages", graphSearchPages),
+            ("Search continuations stay bound to the query, account, and endpoint", searchContinuationBoundaries),
+            ("Search rejects invalid input, cancelled requests, and disconnected accounts", searchCancellationAndValidation),
+            ("Search filters preserve native documents, unknown metadata, and stable ordering", searchFiltersAndOrdering),
             ("Google and OneDrive account storage quotas", storageQuotas),
             ("Unknown, over-limit and invalid storage quotas", unknownAndInvalidQuotas),
             ("Disconnected accounts and stale quota responses", disconnectedQuota),

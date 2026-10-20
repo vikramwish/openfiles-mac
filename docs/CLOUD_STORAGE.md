@@ -42,7 +42,17 @@ Successful sign-in immediately loads the account root. Provider shortcuts in the
 
 Storage indicators show the Mac's current volume and the connected account's quota. Google uses Drive `about.storageQuota` (account usage can include Gmail and Photos); OneDrive uses Graph `me/drive.quota`. These metadata calls use existing read permissions and do not download files. Refresh updates the listing and account quota independently, so unavailable quota data does not hide files. A missing or unlimited provider limit is shown as unavailable, never zero capacity. Local capacity refreshes every minute while visible and can differ from macOS's reclaimable-space estimate.
 
-The storage bar stays visible throughout the main window, including Home, with used/available/total values where reported. Home restores the selected provider's saved connection and shows up to eight items from the current folder, with files before folders. **View all** opens the full cloud browser for paging and transfers. This is a view of the selected provider and folder, not an account-wide document search.
+The storage bar stays visible throughout the main window, including Home, with used/available/total values where reported. Home restores the selected provider's saved connection and shows up to eight items from the current folder, with files before folders. **View all** opens the full cloud browser for paging and transfers. Use **Search cloud…** for a separate account search.
+
+### Search cloud files
+
+Choose **Search cloud…** on Home or in Cloud storage, enter 1–200 characters, and press Search or Return. Google Drive uses its `name contains` query, with Google's filename matching rules. OneDrive uses `root/search`, which can match names, metadata, and indexed contents. Searches cover the selected account rather than the browsed folder; results depend on the provider's index and access permissions. This does not add remote documents to the local semantic index.
+
+Search sends the submitted text to the selected provider using the existing read scope. Results contain metadata only; content downloads happen only through Preview or Save copy. Queries and results are not saved as search history. Native Google Workspace documents open on the provider's website.
+
+Filter loaded results by file type and sort by provider order, name, newest, or largest. Types use MIME metadata and filename extensions where available. Unknown dates/sizes sort last. Each request asks for up to 100 results; **Load more** explicitly fetches the next page, including after an empty filtered page. Counts and sorting describe loaded results, not the total account. Results show a provider tag without inventing a parent-folder path.
+
+Starting a new search cancels the previous request. Stop and closing the search cancel pending work; changing accounts/providers closes the search and rejects late responses. Continuations are tied to the original query/client session. OneDrive next-page links must remain on the same HTTPS Graph search endpoint. Opening a result does not change the browsed folder or upload destination.
 
 ### File previews
 
@@ -106,6 +116,7 @@ Workspace windows share one cloud session, including the selected provider, fold
 ## Data and permissions
 
 - Connecting sends OAuth requests to the selected provider. Listing a folder fetches filenames, identifiers, sizes, modification dates, revisions, and provider links. Downloading retrieves file contents. Uploads transmit selected filenames and file contents; an enabled pairing authorizes these transfers recursively within the paired folder.
+- Explicit cloud searches send the submitted search text to that provider. Search result filtering and sorting run locally on returned metadata.
 - The Google Drive API and Microsoft Graph receive bearer tokens only at their configured HTTPS API endpoints. OneDrive content can be served from a temporary download URL or sent to a provider-issued upload URL; the Graph bearer token is never forwarded to those hosts. Upload session destinations are restricted to the provider's supported HTTPS hosts.
 - OAuth tokens and registration configuration are stored in macOS Keychain. They are not written into `library.json`, source files, or log output. A locked or inaccessible Keychain can prevent connection until it is available.
 - Cloud listings remain separate from the local library. Browsing alone does not index, organize, snapshot, or download remote files. Explicitly paired folders can transfer contents automatically when you enable that option. Files downloaded into your home folder can enter the existing local indexing workflow.
@@ -140,5 +151,6 @@ Before shipping, use disposable files and test accounts to check both providers:
 14. Compare a disposable sync conflict, try each choice, and verify the replaced copy in backups. Change a file after comparison and confirm resolution refuses stale content. Cancel a binary comparison and verify both originals remain.
 15. Index disposable large/older files. Review a Home upload, confirm the displayed destination and retained local original, then repeat while switching the destination in another workspace. Confirm the stale review cannot upload.
 16. Select several local text files and review batch filenames. Apply a prefix/date pattern to selected rows, leave others unchecked, and verify contents and extensions after renaming. Test duplicate target names and a source edited after analysis; neither should start a partially validated batch.
+17. From Home, search for a disposable cloud file outside the current folder. Try punctuation and non-ASCII text, filter by document/image, sort by size/date, and load another page. Preview/save a result and confirm its location tag identifies the provider without displaying the currently browsed folder as its parent. Switch accounts in another window while a search is pending and confirm old results cannot appear.
 
 The app remains a locally signed developer build. Distribution needs a stable signing identity, appropriate provider registration/verification, and testing of Keychain access across updates.

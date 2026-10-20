@@ -8,6 +8,7 @@ struct CloudBrowserView: View {
     @ObservedObject var model: CloudBrowserModel
     @CloudViewState private var showingSyncReport = false
     @CloudViewState private var showingSync = false
+    @CloudViewState private var showingSearch = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -17,6 +18,7 @@ struct CloudBrowserView: View {
                 }.pickerStyle(.segmented).frame(width: 330).disabled(model.disconnecting)
                 Spacer()
                 if model.connected {
+                    Button("Search cloud…") { showingSearch = true }
                     Label(model.connectedForWriting ? "Connected · Uploads enabled" : "Connected · Read only", systemImage: "checkmark.circle").font(.system(size: 11)).foregroundStyle(.secondary)
                     Button("Connection settings") { model.showingRegistration.toggle() }.controlSize(.small)
                 }
@@ -75,6 +77,7 @@ struct CloudBrowserView: View {
         .task { model.activate() }
         .onDisappear { model.deactivate() }
         .onChange(of: model.provider) { showingSync = false }
+        .sheet(isPresented: $showingSearch) { CloudSearchView(model: model) }
         .sheet(isPresented: Binding(get: { model.syncPlan != nil }, set: { if !$0 { model.dismissSyncPreview() } })) {
             if let plan = model.syncPlan { CloudSyncReviewView(model: model, plan: plan) }
         }

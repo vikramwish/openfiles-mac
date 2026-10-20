@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 
-public enum CleanupKind: String, Codable, Sendable {
+public enum CleanupKind: String, Codable, CaseIterable, Sendable {
     case screenshot = "Older screenshot", duplicate = "Exact duplicate", installer = "Old installer", archive = "Old downloaded archive", related = "Similar older document"
 }
 public struct CleanupFile: Identifiable, Sendable {

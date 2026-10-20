@@ -17,6 +17,7 @@ struct HomeCloudView: View {
     @EnvironmentObject private var app: AppModel
     @ObservedObject var cloud: CloudBrowserModel
     @HomeCloudState private var review: CloudUploadReview?
+    @HomeCloudState private var showingSearch = false
     @HomeCloudState private var suggestions: [CloudPlacementSuggestion] = []
     @HomeCloudState private var suggestionTask: Task<Void, Never>?
     private var homeItems: [CloudItem] {
@@ -33,6 +34,7 @@ struct HomeCloudView: View {
                     HStack {
                         Label("Cloud documents", systemImage: "cloud").font(.title2.weight(.semibold))
                         Spacer()
+                        if cloud.connected { Button("Search cloud…") { showingSearch = true } }
                         Button("View all") { app.section = .cloud }
                     }
                     Picker("Cloud provider", selection: Binding(get: { cloud.provider }, set: { cloud.selectProvider($0) })) {
@@ -123,6 +125,7 @@ struct HomeCloudView: View {
             }
         }
         .task { cloud.activate() }
+        .sheet(isPresented: $showingSearch) { CloudSearchView(model: cloud) }
         .onReceive(app.$state) { state in
             suggestionTask?.cancel()
             let files = state.files

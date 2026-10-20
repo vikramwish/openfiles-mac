@@ -9,8 +9,8 @@ Requires **macOS 14+** and **Swift 5.9+** (Xcode or Command Line Tools). No npm,
 These requirements describe the default Apple search backend. The optional EmbeddingGemma 2 build adds local MLX inference and has the additional requirements below.
 
 ```sh
-git clone https://github.com/yatinbayya/OpenFiles.git
-cd OpenFiles
+git clone https://github.com/vikramwish/openfiles.git
+cd openfiles
 make run
 ```
 
@@ -113,6 +113,8 @@ Select a supported cloud file to preview a temporary copy inline. Preview requir
 
 Home's **Suggested for cloud storage** uses local index metadata to suggest large files or older files. **Review upload…** shows the source, indexed size, and current cloud destination before sending a copy. Uploads require write consent and keep local originals, so they do not free disk space. Verify the uploaded copy before separately deciding whether to remove a local original.
 
+Choose **Search cloud…** on Home or in the cloud browser to search across the selected account. Google Drive searches filenames; OneDrive uses its index, which can also match contents. Search terms are sent to that provider using existing read permissions. Filter loaded results by documents, images, audio, video, or archives, and sort by name, newest, or largest. **Load more** retrieves another page; filters and sorting cover loaded results only. Search results show the provider without implying they belong to the folder currently being browsed. Preview, save a copy, or open a result on the provider’s website.
+
 ## Suggested filenames
 
 Select a downloaded file in **Browse files** and choose **Suggest Filename…**, or use its context menu. OpenFiles takes phrases from readable content and ranks them using the active search embedding model, including optional EmbeddingGemma 2. Review up to three alternatives, optionally edit the name, then choose **Rename file**. The extension and folder stay the same. Existing destinations and files changed since preview are refused; bytes are verified before removing the old path.
@@ -140,7 +142,7 @@ Create a password-protected **Private vault**, copy a file in, and lock it. Brow
 | Area | Working now | Extension work |
 | --- | --- | --- |
 | Browsing | Direct filesystem browser, default locations/volumes, history, breadcrumbs, hidden files, path navigation, Quick Look, new folders | Rename, move/copy, Trash, multi-selection, drag/drop, sorting and view modes |
-| Cloud storage | Google Drive/OneDrive sign-in, browsing, downloads, chunked uploads, paired two-way sync with conflict checks and local backups, Keychain credentials | Deletion propagation, rename inference, multiple accounts per provider, shared drives, Workspace exports, remote search |
+| Cloud storage | Google Drive/OneDrive sign-in, browsing, account search with filters/sorting, previews, downloads, chunked uploads, paired two-way sync with conflict checks and local backups, Keychain credentials | Deletion propagation, rename inference, multiple accounts per provider, shared drives, Workspace exports, remote semantic search |
 | Search | System-wide Spotlight search plus automatic local English embeddings; bounded text/PDF extraction | Chunked index, OCR, Office parsers, multilingual models, SQLite/vector index |
 | Organization | Extension rules, exact move preview, collision refusal, content verification, optional one-minute automation | Rule editor, undo journal, filesystem events, model-based classification |
 | Sensitive files | Filename/content heuristics exclude likely matches from embeddings, snapshots, and organization; encrypted APFS vault | Reviewed sensitive-file migration, richer detection, encrypted metadata |
@@ -211,6 +213,8 @@ OPENFILES_UI_SMOKE_ROOT=/private/tmp/openfiles-ui-fixture OPENFILES_UI_SMOKE_SEC
 Open **Clean up** to see an automatic **This Mac** review. No folder choice is required. It covers indexed files in accessible user locations and connected local data volumes; optional **Scope** controls can narrow the review. Equal-size files are SHA-256 hashed in the background to find identical file contents. Every duplicate group must retain at least one copy. Names, metadata, file references and importance may differ even when content hashes match. Nothing is selected automatically.
 
 Suggestions flag installers/archives in Downloads modified over 90 days ago. When compatible local content embeddings are available, they can also flag older documents similar to newer ones (cosine similarity ≥ 0.94). Similarity does not establish duplication or that a document is superseded. Age is modification time, not last use. Suggestions never trigger automatic cleanup, and no cloud AI service receives file contents.
+
+Use **Narrow this review** to combine a minimum size, modification age, and category. These filters narrow the existing review without rescanning or changing its eligibility rules. A matching duplicate group keeps all its copies visible for comparison; copies outside the filter cannot be selected. Changing or resetting filters clears the selection. The matching-file count and byte estimate retain one copy per duplicate group; estimates use logical file sizes, not guaranteed free disk space. Moving files to Trash does not immediately free space.
 
 Preview/reveal files and compare suggested related documents, select individual files, then review the complete path list before **Move to Trash**. The service revalidates hashes, file identity and retained duplicates before moving. It uses macOS Trash with no permanent-delete fallback. Successful moves produce local, private-permission receipts under `Cleanup/<review-id>.json`; restore using Finder’s Trash → Put Back. Trash may be emptied by macOS or the user and is not a backup. Cleanup cannot guarantee whether app references rely on a particular path.
 
