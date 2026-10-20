@@ -99,6 +99,14 @@ Use **Cloud storage** to connect directly to Google Drive or Microsoft OneDrive,
 
 You need a native OAuth app registration for each provider. Registration fields and tokens are stored in macOS Keychain. See [cloud storage setup](docs/CLOUD_STORAGE.md) for registration, permissions, account connection, and validation instructions. Browsing does not automatically download or index remote contents. Explicitly paired folders can transfer contents in both directions; downloaded files can enter normal local indexing. Sync retains local backups before replacements.
 
+Choose **Google Drive** or **OneDrive** in the sidebar to open the provider's files. Signing in loads the root folder automatically; connection settings collapse to leave room for the listing. Each remote row shows its provider and folder, and local browsing/search shows a storage-location tag. The cloud browser displays account storage usage alongside your Mac's volume capacity. Google account usage includes Gmail and Photos where applicable. Unknown limits and quota errors are displayed without hiding files.
+
+## Suggested filenames
+
+Select a downloaded file in **Browse files** and choose **Suggest Filename…**, or use its context menu. OpenFiles takes phrases from readable content and ranks them using the active search embedding model, including optional EmbeddingGemma 2. Review up to three alternatives, optionally edit the name, then choose **Rename file**. The extension and folder stay the same. Existing destinations and files changed since preview are refused; bytes are verified before removing the old path.
+
+Suggestions support text, readable PDFs, and readable images up to 5 MB. Sensitive or excluded files, folders, unavailable models, and unsupported content get an explicit explanation. Remote files must first be downloaded or synced to your Mac. This renames the local copy; cloud sync still treats a rename as a new filename and a missing old file, with deletions left for manual review. Existing version history remains associated with its original path.
+
 ## Organization, history, and vault
 
 **Organize → Analyze My Files** compares existing content embeddings across nested personal folders throughout your home and added locations. It suggests content topics (Work, Study, Travel, Home, Creative, Purchases, Events, Cooking) under `~/Organized`, with source/destination paths, similarity scores, and exclusion counts. Review up to 200 suggestions per pass, select individual files, then choose **Move Selected Files**. Analysis never moves files. Filename-only embeddings, uncertain matches, sensitive files, recognized projects, and system/app folders are excluded. Only indexed content can be analyzed; indexing activity shows remaining coverage. [Organization behavior and limits](docs/ORGANIZATION.md).

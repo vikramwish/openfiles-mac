@@ -7,6 +7,7 @@ private typealias CloudViewState<Value> = SwiftUI.State<Value>
 struct CloudBrowserView: View {
     @ObservedObject var model: CloudBrowserModel
     @CloudViewState private var showingSyncReport = false
+    @CloudViewState private var showingSync = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -17,14 +18,25 @@ struct CloudBrowserView: View {
                 Spacer()
                 if model.connected {
                     Label(model.connectedForWriting ? "Connected · Uploads enabled" : "Connected · Read only", systemImage: "checkmark.circle").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Button("Connection settings") { model.showingRegistration.toggle() }.controlSize(.small)
                 }
             }
 
             Text("Browse cloud files, save local copies, or enable uploads and sync. Pairing a folder authorizes transfers of its filenames and contents, including subfolders. Deletions remain manual; cloud browsing stays separate from local indexing.")
                 .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
-            registration
-            if model.connected && model.connectedForWriting { syncControls }
+            if !model.connected || model.showingRegistration { registration }
+            if model.connected {
+                HStack(alignment: .top, spacing: 24) {
+                    StorageUsageView(title: model.provider == .googleDrive ? "Google account storage" : "OneDrive storage", usage: model.storageUsage, loading: model.loadingStorage, error: model.storageError)
+                    Spacer()
+                    VolumeStorageView(url: FileManager.default.homeDirectoryForCurrentUser)
+                }
+                if model.connectedForWriting {
+                    DisclosureGroup("Uploads and folder sync", isExpanded: $showingSync) { syncControls.padding(.top, 8) }
+                        .font(.callout)
+                }
+            }
 
             if let error = model.error {
                 HStack(alignment: .top, spacing: 10) {
@@ -35,7 +47,7 @@ struct CloudBrowserView: View {
                 }.font(.system(size: 12)).padding(12).background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
             }
 
-            if model.connected { browser }
+            if model.connected { browser.frame(minHeight: 200, maxHeight: .infinity) }
             else if model.loadingConfiguration { ProgressView("Reading saved connection…").frame(maxWidth: .infinity, maxHeight: .infinity) }
             else { disconnected }
 
@@ -59,6 +71,7 @@ struct CloudBrowserView: View {
         .padding(.horizontal, 30).padding(.bottom, 20)
         .task { model.activate() }
         .onDisappear { model.deactivate() }
+        .onChange(of: model.provider) { showingSync = false }
         .sheet(isPresented: Binding(get: { model.syncPlan != nil }, set: { if !$0 { model.dismissSyncPreview() } })) {
             if let plan = model.syncPlan {
                 VStack(alignment: .leading, spacing: 16) {
@@ -213,11 +226,14 @@ struct CloudBrowserView: View {
             Image(systemName: item.isFolder ? "folder" : "doc").font(.system(size: 19)).frame(width: 24).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.name).font(.system(size: 12)).lineLimit(1)
+                Text(model.currentLocation.path).font(.system(size: 10)).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle).help(model.currentLocation.path)
                 if !item.isFolder && !item.canDownload {
                     Text(item.webURL == nil ? "Download unavailable" : "Open on the provider’s website").font(.system(size: 10)).foregroundStyle(.secondary)
                 }
             }
             Spacer(minLength: 10)
+            FileLocationTag(location: model.currentLocation)
             if let size = item.size, !item.isFolder {
                 Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file)).font(.system(size: 10)).foregroundStyle(.secondary).frame(width: 70, alignment: .trailing)
             }

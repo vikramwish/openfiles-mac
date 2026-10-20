@@ -36,6 +36,11 @@ final class CloudBrowserModel: ObservableObject {
     @Published private(set) var error: String?
     @Published private(set) var status = "Connect an account to browse its files."
     @Published private(set) var downloadedURL: URL?
+    @Published private(set) var storageUsage: StorageUsage?
+    @Published private(set) var storageError: String?
+    @Published private(set) var loadingStorage = false
+    private var storageTask: Task<Void, Never>?
+    private var storageGeneration = UUID()
 
     private let syncEngine = CloudSyncEngine(directory: CloudSyncDigest.stateDirectory, digest: CloudSyncDigest.compute)
     private var uploadTask: Task<Void, Never>?
@@ -59,6 +64,7 @@ final class CloudBrowserModel: ObservableObject {
     var connectionBusy: Bool { loadingConfiguration || authenticating || disconnecting }
     var canDisconnect: Bool { client != nil || error != nil }
     var currentFolderName: String { folders.last?.name ?? provider.displayName }
+    var currentLocation: FileStorageLocation { .remote(provider: provider, folders: folders.map(\.name)) }
 
     private var activeBrowsers = 0
 
@@ -184,14 +190,32 @@ final class CloudBrowserModel: ObservableObject {
 
     func openFolder(_ item: CloudItem) {
         guard item.isFolder, connected else { return }
-        folders.append(CloudFolder(id: item.id, name: item.name)); refresh()
+        folders.append(CloudFolder(id: item.id, name: item.name)); loadPage(append: false)
     }
 
-    func goBack() { guard !folders.isEmpty else { return }; folders.removeLast(); refresh() }
-    func goToRoot() { folders = []; refresh() }
-    func goToFolder(at index: Int) { folders = Array(folders.prefix(index + 1)); refresh() }
+    func goBack() { guard !folders.isEmpty else { return }; folders.removeLast(); loadPage(append: false) }
+    func goToRoot() { folders = []; loadPage(append: false) }
+    func goToFolder(at index: Int) { folders = Array(folders.prefix(index + 1)); loadPage(append: false) }
 
-    func refresh() { loadPage(append: false) }
+    func refresh() { loadPage(append: false); refreshStorageUsage() }
+    private func refreshStorageUsage() {
+        guard connected, let client else { return }
+        storageTask?.cancel(); storageGeneration = UUID()
+        let generation = storageGeneration, account = accountGeneration
+        loadingStorage = true; storageError = nil
+        storageTask = Task {
+            defer { if storageGeneration == generation { loadingStorage = false } }
+            do {
+                let usage = try await client.storageUsage()
+                guard !Task.isCancelled, generation == storageGeneration, account == accountGeneration, connected else { return }
+                storageUsage = usage
+            } catch {
+                guard !Task.isCancelled, generation == storageGeneration, account == accountGeneration, connected else { return }
+                storageError = error.localizedDescription
+                // A quota error must not hide an otherwise usable folder listing.
+            }
+        }
+    }
     func loadMore() { guard nextPageToken != nil, !loading else { return }; loadPage(append: true) }
 
     private func loadPage(append: Bool) {
@@ -279,7 +303,7 @@ final class CloudBrowserModel: ObservableObject {
 
     /// Let cancelled transfers finish their cleanup/checkpoints before the process exits.
     func shutdown() async {
-        let pending = [uploadTask, syncTask, downloadTask, configurationTask, authenticationTask, listingTask]
+        let pending = [uploadTask, syncTask, downloadTask, configurationTask, authenticationTask, listingTask, storageTask]
         cancelActiveWork()
         for task in pending { await task?.value }
         await authenticationCleanupTask?.value
@@ -288,11 +312,13 @@ final class CloudBrowserModel: ObservableObject {
     private func handleExpiredConnection(_ error: Error) {
         if case CloudError.connectionRequired = error {
             connected = false; connectedForWriting = false; setAutomaticSync(false); clearListing()
+            storageTask?.cancel(); storageUsage = nil; storageError = nil; loadingStorage = false
             status = "Authorization expired or was revoked. Connect again to continue."
         }
     }
 
     func cancelActiveWork() {
+        storageTask?.cancel(); storageGeneration = UUID(); loadingStorage = false; storageUsage = nil; storageError = nil
         uploadTask?.cancel(); syncTask?.cancel(); automaticTask?.cancel(); automaticSync = false
         uploading = false; syncing = false; syncPlan = nil
         let wasAuthenticating = authenticating, activeClient = client, pendingSignIn = authenticationTask

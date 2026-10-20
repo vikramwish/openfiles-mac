@@ -16,7 +16,8 @@ public actor FileLibrary {
     private let objects: EmbeddingObjects
     private var embeddingFactory: @Sendable () -> any EmbeddingBackend
     var queryBackend: any EmbeddingBackend
-    private var embeddingGeneration = UUID()
+    var embeddingGeneration = UUID()
+    var renamePreviews: [UUID: RenamePreview] = [:]
     private var queryCache: [String: [Double]] = [:]
     private var scanRunning = false
     private var control: IndexControl?
@@ -45,6 +46,7 @@ public actor FileLibrary {
     public func setEmbeddingBackend(factory: @escaping @Sendable () -> any EmbeddingBackend) throws {
         guard !scanRunning else { throw OpenFilesError.message("Stop indexing before changing the search model.") }
         embeddingFactory = factory; queryBackend = factory(); embeddingGeneration = UUID()
+        renamePreviews.removeAll()
         queryCache.removeAll()
         var progress = IndexProgress()
         progress.engine = queryBackend.displayName; progress.engineID = queryBackend.identifier

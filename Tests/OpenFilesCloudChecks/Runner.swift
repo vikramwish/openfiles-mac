@@ -509,6 +509,65 @@ private func cancelledSignIn() async throws {
     try expect(token == nil, "Cancelled sign-in must not store a late token response")
 }
 
+private func storageQuotas() async throws {
+    let (google, _, googleTransport) = client(.googleDrive, replies: [Reply(#"{"storageQuota":{"limit":"15000000000","usage":"4000000000","usageInDrive":"2000000000"}}"#)])
+    let g = try await google.storageUsage()
+    try expect(g.total == 15_000_000_000 && g.used == 4_000_000_000 && g.available == 11_000_000_000, "Google account quota must include storage outside Drive")
+    let googleRequests = await googleTransport.recorded()
+    try expect(googleRequests[0].url?.path == "/drive/v3/about" && query(googleRequests[0].url!)["fields"] == "storageQuota", "Unexpected Google quota request")
+    try expect(googleRequests[0].value(forHTTPHeaderField: "Authorization") == "Bearer fake-access", "Quota requests require account authorization")
+    try await googleTransport.finish()
+    let (oneDrive, _, graphTransport) = client(.oneDrive, replies: [Reply(#"{"quota":{"total":1000,"used":600,"remaining":300,"state":"normal"}}"#)])
+    let m = try await oneDrive.storageUsage()
+    try expect(m.total == 1000 && m.used == 600 && m.available == 300, "Preserve provider-reported remaining storage")
+    let graphRequests = await graphTransport.recorded()
+    try expect(graphRequests[0].url?.path == "/v1.0/me/drive" && query(graphRequests[0].url!)["$select"] == "quota", "Unexpected OneDrive quota request")
+    try await graphTransport.finish()
+}
+
+private func unknownAndInvalidQuotas() async throws {
+    let (api, _, transport) = client(.googleDrive, replies: [Reply(#"{"storageQuota":{"usage":"123"}}"#), Reply(#"{"storageQuota":{"limit":"100","usage":"120"}}"#), Reply(#"{"storageQuota":{"usage":"invalid"}}"#), Reply(#"{"storageQuota":{}}"#)])
+    let unlimited = try await api.storageUsage()
+    try expect(unlimited.used == 123 && unlimited.total == nil && unlimited.available == nil, "A missing limit must not appear as zero storage")
+    let over = try await api.storageUsage()
+    try expect(over.available == 0 && over.fractionUsed == 1, "Over-quota storage must not produce negative capacity")
+    for _ in 0..<2 {
+        try await expectError({ _ = try await api.storageUsage() }, matching: { if case CloudError.invalidResponse = $0 { return true }; return false })
+    }
+    try await transport.finish()
+    let (graph, _, graphTransport) = client(.oneDrive, replies: [Reply(#"{"quota":{"used":-1,"total":100}}"#)])
+    try await expectError({ _ = try await graph.storageUsage() }, matching: { if case CloudError.invalidResponse = $0 { return true }; return false })
+    try await graphTransport.finish()
+}
+
+private func disconnectedQuota() async throws {
+    let (api, _, transport) = client(.oneDrive, replies: [], token: nil)
+    try await expectError({ _ = try await api.storageUsage() }, matching: { if case CloudError.connectionRequired = $0 { return true }; return false })
+    let requests = await transport.recorded(); try expect(requests.isEmpty, "Disconnected quota must not make an HTTP request")
+    let store = MemoryStore(provider: .googleDrive, token: liveToken())
+    let blocked = PausedTransport(body: #"{"storageQuota":{"usage":"123","limit":"1000"}}"#)
+    let active = CloudClient(configuration: CloudConfiguration(provider: .googleDrive, clientID: "fixture"), store: store, transport: blocked)
+    let pending = Task { try await active.storageUsage() }
+    await blocked.waitForRequest()
+    try await active.disconnect(); await blocked.resume()
+    try await expectError({ _ = try await pending.value }, matching: { $0 is CancellationError })
+}
+
+private func locationLabels() async throws {
+    let home = URL(fileURLWithPath: "/Users/fixture")
+    func local(_ path: String) -> FileStorageLocation { .local(home.appendingPathComponent(path), home: home) }
+    try expect(local("Documents/report.pdf").label == "This Mac", "Local files must be labelled")
+    try expect(local("Library/CloudStorage/OneDrive-Personal/notes.txt").label == "OneDrive", "OneDrive provider folder was not recognized")
+    try expect(local("Library/CloudStorage/GoogleDrive-fixture/My Drive/notes.txt").label == "Google Drive", "Google provider folder was not recognized")
+    try expect(local("Library/Mobile Documents/com~apple~CloudDocs/notes.txt").label == "iCloud Drive", "iCloud folder was not recognized")
+    try expect(local("Documents/OneDrive/report.txt").label == "This Mac", "Ordinary folder names must not imply a provider")
+    try expect(local("Library/CloudStorage/OneDriveImposter/report.txt").label == "This Mac", "Provider prefix must have a boundary")
+    try expect(!local("Library/CloudStorage/OneDrive-Personal/notes.txt").isRemote, "A local provider path does not prove remote availability")
+    let remote = FileStorageLocation.remote(provider: .googleDrive, folders: ["Projects", "Travel"])
+    try expect(remote.isRemote && remote.label == "Google Drive" && remote.path == "Google Drive / Projects / Travel", "Remote files need provider and folder provenance")
+    try expect(FileStorageLocation.remote(provider: .oneDrive).path == "OneDrive", "Remote root needs a provider label")
+}
+
 @main
 private struct Runner {
     static func main() async {
@@ -518,6 +577,10 @@ private struct Runner {
             ("Authorization code exchange and form encoding", authorizationCodeExchange),
             ("Google folders, native documents and pagination", googleFolderPages),
             ("OneDrive folders and pagination", graphFolderPages),
+            ("Google and OneDrive account storage quotas", storageQuotas),
+            ("Unknown, over-limit and invalid storage quotas", unknownAndInvalidQuotas),
+            ("Disconnected accounts and stale quota responses", disconnectedQuota),
+            ("Local and remote files retain accurate location labels", locationLabels),
             ("Refresh token rotation and preservation", refreshRotationAndPreservation),
             ("Revoked grant clears credentials", revokedRefreshRequiresConnection),
             ("Disconnected listing makes no HTTP request", missingConnectionDoesNotRequest),

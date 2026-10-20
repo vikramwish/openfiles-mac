@@ -65,6 +65,7 @@ final class AppModel: ObservableObject {
     @Published var showingNewFolder = false
     @Published var newFolderName = ""
     @Published var previewItem: BrowserItem?
+    @Published var renameItem: BrowserItem?
     @Published var editingURL: URL?
     @Published var syncStatus = "Loading local index"
     private var fileWatcher: FileEventWatcher?

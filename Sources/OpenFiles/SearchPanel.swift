@@ -437,6 +437,7 @@ private struct SearchPanelView: View {
                     .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
             Spacer(minLength: 10)
+            FileLocationTag(location: .local(result.item.url))
             Text(result.reason).font(.system(size: 9)).foregroundStyle(.secondary)
             Button { store.selected = index; store.preview?() } label: { Image(systemName: "eye") }.buttonStyle(.borderless).help("Quick Look").accessibilityLabel("Preview \(result.item.name)")
             Image(systemName: "return").font(.system(size: 10)).foregroundStyle(index == store.selected ? .secondary : .tertiary)
