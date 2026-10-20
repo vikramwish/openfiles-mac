@@ -8,3 +8,12 @@ xcuserdata/
 *.log
 *.sparsebundle/
 *.app/
+
+# python / semantic finder
+.venv/
+.model_cache/
+index.db*
+config.json
+__pycache__/
+*.pyc
+

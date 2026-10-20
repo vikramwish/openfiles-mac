@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import Combine
 import OpenFilesCore
+import OpenFilesAgent
 #if canImport(OpenFilesMLX)
 import OpenFilesMLX
 #endif
@@ -67,6 +68,27 @@ final class AppModel: ObservableObject {
     @Published var newFolderName = ""
     @Published var previewItem: BrowserItem?
     @Published var renameItem: BrowserItem?
+    @Published var showingAgent = false
+    @Published var agentBusy = false
+    @Published var agentPlan: AgentPlan?
+    @Published var agentSelection = Set<UUID>()
+    @Published var agentOutcomes: [String] = []
+    @Published var agentError: String?
+    @Published var agentConnection: String?
+    @Published var agentModelOptions: [AgentModelInfo] = []
+    @Published var agentEndpointBase: String = UserDefaults.standard.string(forKey: "agentEndpointBase") ?? "https://openrouter.ai/api/v1" {
+        didSet { UserDefaults.standard.set(agentEndpointBase, forKey: "agentEndpointBase") }
+    }
+    @Published var agentModel: String = UserDefaults.standard.string(forKey: "agentModel") ?? "z-ai/glm-5.3" {
+        didSet { UserDefaults.standard.set(agentModel, forKey: "agentModel") }
+    }
+    @Published var agentIncludeExcerpts: Bool = UserDefaults.standard.object(forKey: "agentIncludeExcerpts") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(agentIncludeExcerpts, forKey: "agentIncludeExcerpts") }
+    }
+    @Published var agentHasKey = AgentKeychain.load() != nil
+    @Published var collectionSuggestions: CollectionSuggestionSet?
+    @Published var collectionSuggesting = false
+    @Published var collectionSuggestionError: String?
     @Published var batchRenameRequest: BatchRenameRequest?
     @Published var editingURL: URL?
     @Published var syncStatus = "Loading local index"
@@ -143,6 +165,7 @@ final class AppModel: ObservableObject {
     }
     let browser = FileBrowser()
     private let systemSearch = SystemSearch()
+    private let semanticService = SemanticSearchService.shared
     private var folderItems: [BrowserItem] = []
     private var spotlightItems: [BrowserItem] = []
     private var semanticItems: [BrowserItem] = []
@@ -517,6 +540,11 @@ final class AppModel: ObservableObject {
         search()
         selectedURL = moves.last?.1
     }
+    func refreshAfterAgentChanges(select: URL?) {
+        reloadFolder()
+        search()
+        selectedURL = select
+    }
     private func search() {
         searchTask?.cancel(); systemSearch.stop(); searchGeneration = UUID()
         spotlightItems = []; semanticItems = []; searchingSystem = false; searchResultCount = 0
@@ -530,9 +558,14 @@ final class AppModel: ObservableObject {
             guard !Task.isCancelled, searchGeneration == token else { return }
             searchingSystem = true
             systemSearch.search(text, folder: searchThisFolder ? currentFolder : nil)
+            // Hybrid semantic results: the local BGE/SigLIP2 service covers
+            // documents, photos and videos; the built-in NLEmbedding index is
+            // the English-text fallback. Service results come first.
+            var urls = await semanticService.search(text)
             let found = await library.search(text)
-            let urls = found.prefix(100).map(\.url).filter { !searchThisFolder || FileRules.contains(currentFolder, $0) }
-            let items = await browser.items(at: urls)
+            urls.append(contentsOf: found.map(\.url))
+            let scoped = urls.filter { !searchThisFolder || FileRules.contains(currentFolder, $0) }
+            let items = await browser.items(at: Array(scoped.prefix(150)))
             guard !Task.isCancelled, searchGeneration == token else { return }
             semanticItems = items; mergeSearchResults()
         }

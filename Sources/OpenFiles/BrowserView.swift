@@ -80,6 +80,7 @@ struct BrowserView: View {
             HStack {
                 Text("\(selection.count) selected").foregroundStyle(.secondary)
                 Spacer()
+                Button("Ask Hermes…") { model.showingAgent = true }
                 if selectedFiles.count > 1 {
                     Button("Suggest \(selectedFiles.count) Filenames…") { model.batchRenameRequest = BatchRenameRequest(items: selectedFiles) }
                 } else if let item = model.selectedItem, !item.isFolder, !item.isPackage {

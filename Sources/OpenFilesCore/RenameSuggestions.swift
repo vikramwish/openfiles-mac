@@ -103,6 +103,21 @@ extension FileLibrary {
 
     public func discardRenamePreview(_ id: UUID) { renamePreviews[id] = nil }
 
+    /// A rename preview for reviewed agent renames. No content extraction or ranked suggestions, so the
+    /// readable-content and 5 MB suggestion caps do not apply; sensitivity is enforced on the filename, and
+    /// applyRename still verifies stamps, digests and collisions before anything is replaced.
+    public func previewAgentRename(_ url: URL) async throws -> RenamePreview {
+        guard url.isFileURL else { throw OpenFilesError.message("Choose a file on this Mac.") }
+        let source = url.deletingLastPathComponent().canonical.appendingPathComponent(url.lastPathComponent)
+        try checkRenameEligibility(source)
+        let stamp = try FileStamp.read(source)
+        let digest = try FileIntegrity.digest(source)
+        let preview = RenamePreview(id: UUID(), source: source, suggestions: [], model: queryBackend.displayName, stamp: stamp, digest: digest)
+        if renamePreviews.count >= 16 { renamePreviews.removeAll() }
+        renamePreviews[preview.id] = preview
+        return preview
+    }
+
     /// A displayed preview and an explicit filename are required. Existing destinations are never replaced.
     public func applyRename(previewID: UUID, name: String) async throws -> RenameResult {
         guard let preview = renamePreviews.removeValue(forKey: previewID) else {

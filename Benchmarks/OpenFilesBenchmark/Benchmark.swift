@@ -35,8 +35,12 @@ struct Benchmark {
         let count = args.firstIndex(of: "--count").flatMap { $0 + 1 < args.count ? Int(args[$0 + 1]) : nil } ?? 10000
         let root = URL(fileURLWithPath: "/Synthetic/Downloads"), now = Date()
         let catalog = SearchCatalog()
-        let records = (0..<count).map { index in
-            FileRecord(id: UUID(), url: root.appendingPathComponent("Document-\(index)." + (index % 3 == 0 ? "pdf" : "txt")), root: root, size: 1024, modified: now.addingTimeInterval(-Double(index % 60) * 86400), isProject: false, sensitive: false, vector: nil, searchTerms: FileSearchQuery.words(index % 4 == 0 ? "Australian government taxation invoice" : "Studio design launch plan project"))
+        let records = (0..<count).map { index -> FileRecord in
+            let name = "Document-\(index)." + (index % 3 == 0 ? "pdf" : "txt")
+            let modified = now.addingTimeInterval(-Double(index % 60) * 86400)
+            let terms = FileSearchQuery.words(index % 4 == 0 ? "Australian government taxation invoice" : "Studio design launch plan project")
+            return FileRecord(id: UUID(), url: root.appendingPathComponent(name), root: root, size: 1024,
+                              modified: modified, isProject: false, sensitive: false, vector: nil, searchTerms: terms)
         }
         let start = Date(); catalog.replace(records); let build = Date().timeIntervalSince(start)
         let queries = ["government files", "launch plan", "PDFs in Downloads this month", "recent files", "all files", "govern"]

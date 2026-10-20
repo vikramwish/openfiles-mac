@@ -8,6 +8,7 @@ public actor FileLibrary {
     var state = LibraryState()
     private var proposals: [MoveProposal] = []
     var semanticOrganizationPlan: OrganizationPreview?
+    var agentMovePlan: AgentMovePreview?
     var semanticOrganizationGeneration = UUID()
     private var discoveryRoots: [URL] = []
     private let fm = FileManager.default

@@ -1,0 +1,22 @@
+Quarterly Report — Falcon Drone Project (Q3)
+
+Team status summary for the autonomous falcon-shaped surveillance drone.
+
+1. FLIGHT CONTROLLER
+The PID tuning for hover stability is nearly complete. Roll oscillation
+at high wind speeds was fixed by increasing the derivative gain on the
+attitude loop. Flight time averages 22 minutes on the 4-cell lithium
+battery.
+
+2. VISION SYSTEM
+Object detection runs a lightweight YOLO model on the onboard Jetson.
+We achieved 91% precision on bird-classification during field tests.
+Thermal camera integration is scheduled for next quarter.
+
+3. REGULATORY
+Filed for FAA part 107 waiver for flights beyond visual line of sight.
+The county park permits were renewed without issue.
+
+4. BUDGET
+Remaining: $14,220 of $50,000. Major upcoming purchases include
+replacement propellers and a second radio transmitter.
