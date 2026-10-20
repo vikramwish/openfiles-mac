@@ -15,4 +15,5 @@
 <key>NSDocumentsFolderUsageDescription</key><string>Index and organize files in folders you explicitly connect.</string>
 <key>NSDownloadsFolderUsageDescription</key><string>Find and organize your downloads when you connect the Downloads folder.</string>
 <key>NSDesktopFolderUsageDescription</key><string>Find and organize your desktop files when you connect the Desktop folder.</string>
+<key>NSPhotoLibraryUsageDescription</key><string>Browse, search, find duplicate photos, organize albums, and export originals inside OpenFiles. Changes are made only when you choose them.</string>
 </dict></plist>

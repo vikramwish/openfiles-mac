@@ -14,7 +14,7 @@ public struct FileRecord: Codable, Identifiable, Hashable, Sendable {
     public var searchTerms: [String]? = nil
     public var imageContent: ImageContentIndex? = nil
     public var name: String { url.lastPathComponent }
-    public var category: String { isProject ? "Project" : FileRules.category(url) }
+    public var category: String { url.pathExtension.lowercased() == "photoslibrary" ? "Photos Library" : isProject ? "Project" : FileRules.category(url) }
     private enum CodingKeys: String, CodingKey { case id, url, root, size, modified, isProject, sensitive, vector, indexMetadata, searchTerms, imageContent }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -95,10 +95,20 @@ public enum OpenFilesError: LocalizedError {
 public enum FileRules {
     public static let textExtensions: Set<String> = ["txt", "md", "csv", "json", "swift", "py", "js", "ts", "tsx", "html", "css", "yaml", "yml", "xml", "rtf"]
     public static let packageExtensions: Set<String> = ["app", "band", "logicx", "imovielibrary", "photoslibrary", "pages", "numbers", "key", "sparsebundle"]
+    /// Photos owns the contents of its library bundle. Treat it as one item.
+    public static func photoLibrary(containing url: URL) -> URL? {
+        var current = url.standardizedFileURL
+        while current.path != "/" {
+            if current.pathExtension.lowercased() == "photoslibrary" { return current }
+            current.deleteLastPathComponent()
+        }
+        return nil
+    }
     private static let sensitiveExpression = try! NSRegularExpression(pattern: #"passport|password|secret|credential|private.?key|tax.?return|bank.?statement|social.?security|medical|\.pem$|\.key$|-----BEGIN .*PRIVATE KEY-----|\b\d{3}-\d{2}-\d{4}\b"#, options: [.caseInsensitive])
     public static func sensitive(_ text: String) -> Bool { sensitiveExpression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil }
     public static func category(_ url: URL) -> String {
         switch url.pathExtension.lowercased() {
+        case "photoslibrary": return "Photos Library"
         case "png", "jpg", "jpeg", "heic", "gif", "svg", "webp": return "Images"
         case "mov", "mp4", "m4v", "avi": return "Video"
         case "wav", "mp3", "aiff", "m4a", "flac": return "Audio"

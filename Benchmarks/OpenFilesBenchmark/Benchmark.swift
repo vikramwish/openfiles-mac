@@ -5,6 +5,9 @@ import OpenFilesCore
 struct Benchmark {
     static func main() async throws {
         let args = CommandLine.arguments
+        if args.contains("--mixed") { try await OptimizationBenchmarks.mixed(args); return }
+        if args.contains("--tokens") { try OptimizationBenchmarks.tokens(args); return }
+        if args.contains("--graph") { try GraphBenchmarks.run(args); return }
         if args.contains("--search-only") { try searchBenchmark(args); return }
         let count = args.firstIndex(of: "--count").flatMap { $0 + 1 < args.count ? Int(args[$0 + 1]) : nil } ?? 48
         let base = FileManager.default.temporaryDirectory.appendingPathComponent("OpenFilesBenchmark-\(UUID())")

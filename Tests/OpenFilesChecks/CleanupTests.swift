@@ -21,7 +21,7 @@ struct CleanupChecks {
         ("Cleanup Trash errors preserve source files and never fall back to deletion", trashFailure)
     ]
     private static func fixture() throws -> (URL, URL, URL) {
-        let base = FileManager.default.temporaryDirectory.appendingPathComponent("OpenFilesCleanup-\(UUID())").resolvingSymlinksInPath()
+        let base = URL(fileURLWithPath: "/private/tmp", isDirectory: true).appendingPathComponent("OpenFilesCleanup-\(UUID())").resolvingSymlinksInPath()
         let scope = base.appendingPathComponent("Downloads")
         try FileManager.default.createDirectory(at: scope, withIntermediateDirectories: true)
         return (base, scope, base.appendingPathComponent("AppData"))
@@ -45,11 +45,14 @@ struct CleanupChecks {
         let different = try write("Different.txt", in: scope, text: "DIFF document bytes")
         let bytes = try Data(contentsOf: a), stamp = try FileStamp.read(a)
         let service = CleanupService(directory: data, trash: TestCleanupTrash(destination: base.appendingPathComponent("TestTrash")))
-        let plan = try await service.preview(files: [record(a), record(b), record(different)], scope: scope)
+        // Persisted Foundation URLs can retain /private/tmp while standardized URLs use /tmp.
+        var aliased = try record(b)
+        aliased.url = URL(string: b.absoluteString.replacingOccurrences(of: "file:///tmp/", with: "file:///private/tmp/"))!
+        let plan = try await service.preview(files: [record(a), aliased, record(different)], scope: scope)
         checkEqual(plan.duplicates.count, 1); checkEqual(plan.duplicates.first?.files.count, 2)
         checkTrue(plan.suggestions.isEmpty)
         checkEqual(try Data(contentsOf: a), bytes); checkEqual(try FileStamp.read(a), stamp)
-        guard let group = plan.duplicates.first, let selected = group.files.first(where: { $0.url == b }) else { failCheck("Missing duplicate group"); return }
+        guard let group = plan.duplicates.first, let selected = group.files.first(where: { $0.url.lastPathComponent == b.lastPathComponent }) else { failCheck("Missing duplicate group"); return }
         await rejects { _ = try await service.apply(reviewID: plan.id, selected: Set(group.files.map(\.id))) }
         checkTrue(FileManager.default.fileExists(atPath: a.path)); checkTrue(FileManager.default.fileExists(atPath: b.path))
         let result = try await service.apply(reviewID: plan.id, selected: [selected.id])
@@ -72,19 +75,26 @@ struct CleanupChecks {
         let files = try [a, b, protected, symbolic].map { try record($0) }
         var plan = try await service.preview(files: files, scope: scope, excluding: [excluded])
         checkEqual(plan.duplicates.first?.files.count, 2)
-        checkTrue(plan.files.allSatisfy { $0.url != symbolic && $0.url != protected })
-        let selection = plan.files.first { $0.url == b }!
+        checkTrue(plan.files.allSatisfy { $0.url.lastPathComponent != symbolic.lastPathComponent && $0.url.lastPathComponent != protected.lastPathComponent })
+        guard let selection = plan.files.first(where: { $0.url.lastPathComponent == b.lastPathComponent }) else { failCheck("Missing selected duplicate"); return }
         try Data("changed contents".utf8).write(to: a)
         await rejects { _ = try await service.apply(reviewID: plan.id, selected: [selection.id]) }
         checkTrue(FileManager.default.fileExists(atPath: b.path))
         try Data("same document bytes".utf8).write(to: a)
         plan = try await service.preview(files: try [a,b].map { try record($0) }, scope: scope)
-        let candidate = plan.files.first { $0.url == b }!
+        guard let candidate = plan.files.first(where: { $0.url.lastPathComponent == b.lastPathComponent }) else { failCheck("Missing protected duplicate"); return }
         await rejects { _ = try await service.apply(reviewID: plan.id, selected: [candidate.id], excluding: [b]) }
         checkTrue(FileManager.default.fileExists(atPath: b.path))
+        // A selected file changing also rejects the complete batch before any move.
+        plan = try await service.preview(files: try [a,b].map { try record($0) }, scope: scope)
+        guard let changedSelection = plan.files.first(where: { $0.url.lastPathComponent == b.lastPathComponent }) else { failCheck("Missing changed duplicate"); return }
+        try Data("replacement document".utf8).write(to: b)
+        await rejects { _ = try await service.apply(reviewID: plan.id, selected: [changedSelection.id]) }
+        checkTrue(FileManager.default.fileExists(atPath: a.path)); checkTrue(FileManager.default.fileExists(atPath: b.path))
+        try Data("same document bytes".utf8).write(to: b)
         // New project markers after review prevent cleanup too.
         plan = try await service.preview(files: try [a,b].map { try record($0) }, scope: scope)
-        let projectCandidate = plan.files.first { $0.url == b }!
+        guard let projectCandidate = plan.files.first(where: { $0.url.lastPathComponent == b.lastPathComponent }) else { failCheck("Missing project duplicate"); return }
         _ = try write("package.json", in: scope, text: "{}")
         await rejects { _ = try await service.apply(reviewID: plan.id, selected: [projectCandidate.id]) }
         checkTrue(FileManager.default.fileExists(atPath: a.path))
@@ -94,7 +104,7 @@ struct CleanupChecks {
         try FileManager.default.linkItem(at: a, to: hard)
         plan = try await service.preview(files: try [a,b,hard].map { try record($0) }, scope: scope)
         checkTrue(plan.duplicates.isEmpty)
-        checkTrue(plan.files.allSatisfy { $0.url != a && $0.url != hard })
+        checkTrue(plan.files.allSatisfy { $0.url.lastPathComponent != a.lastPathComponent && $0.url.lastPathComponent != hard.lastPathComponent })
     }
     static func suggestions() async throws {
         let (base, scope, data) = try fixture(); defer { try? FileManager.default.removeItem(at: base) }
@@ -106,8 +116,8 @@ struct CleanupChecks {
         let files = try [record(installer), record(recent), record(old, vector: [1,0], engine: "test"), record(newer, vector: [1,0.01], engine: "test")]
         let plan = try await service.preview(files: files, scope: scope, now: now)
         checkTrue(plan.duplicates.isEmpty); checkEqual(plan.suggestions.count, 2); checkTrue(plan.usesEmbeddings)
-        checkTrue(plan.suggestions.contains { $0.kind == .installer && $0.url == installer })
-        checkTrue(plan.suggestions.contains { $0.kind == .related && $0.relatedURL == newer && $0.evidence.contains("distinct") })
+        checkTrue(plan.suggestions.contains { $0.kind == .installer && $0.url.lastPathComponent == installer.lastPathComponent })
+        checkTrue(plan.suggestions.contains { $0.kind == .related && $0.relatedURL?.lastPathComponent == newer.lastPathComponent && $0.evidence.contains("distinct") })
         checkTrue(FileManager.default.fileExists(atPath: old.path))
         let noModel = try await service.preview(files: try [installer,recent,old,newer].map { try record($0) }, scope: scope)
         checkEqual(noModel.suggestions.count, 1); checkFalse(noModel.usesEmbeddings)

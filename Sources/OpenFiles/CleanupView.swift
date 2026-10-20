@@ -85,9 +85,15 @@ struct CleanupView: View {
                             Label(model.scope?.path ?? "Choose a folder to review", systemImage: "folder")
                                 .lineLimit(1).truncationMode(.middle).help(model.scope?.path ?? "")
                             Spacer()
-                            Button("Choose folder…") { model.chooseFolder() }.disabled(model.busy)
-                            Button("Analyze") { model.analyze(excluding: protected) }
-                                .buttonStyle(.borderedProminent).disabled(model.scope == nil || model.busy)
+                            Button(model.scope == nil ? "Choose folder and review…" : "Change folder…") {
+                                let previous = model.scope
+                                model.chooseFolder()
+                                if model.scope != nil && (model.scope != previous || model.review == nil) { model.analyze(excluding: protected) }
+                            }.disabled(model.busy)
+                            if model.scope != nil {
+                                Button("Check again") { model.analyze(excluding: protected) }
+                                    .buttonStyle(.borderedProminent).disabled(model.busy)
+                            }
                         }
                         Text("Uses indexed files only. Protected locations, document-pack attachments, projects, links, sensitive-classified files and iCloud items are excluded. Other cloud folders may sync Trash changes to other devices; choose a local folder.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -119,7 +125,7 @@ struct CleanupView: View {
                         Text("\(review.skipped) skipped").font(.caption).foregroundStyle(.secondary)
                     }
                     if review.limited {
-                        Label("Partial review: limited to 5,000 eligible files, 256 MB per file and 2 GB of hashing. Review a smaller folder for more coverage.", systemImage: "info.circle")
+                        Label("Partial review: limited to 5,000 eligible files, 256 MB per file and 2 GB of hashing, and 100,000 similarity comparisons. Review a smaller folder for more coverage.", systemImage: "info.circle")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                     Text("Nothing is selected automatically. Similarity and file age cannot tell whether a file matters to you.")

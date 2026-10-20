@@ -35,7 +35,7 @@ struct OrganizationChecks {
         ("Content organization spans nested home folders without moving during analysis", crossFolder),
         ("Semantic organization protects stale sources and destination links", staleAndSymlink),
         ("Semantic topic matching rejects ambiguity and incompatible vectors", ambiguity)
-    ]
+    ] + OrganizationContextChecks.scenarios
     static func crossFolder() async throws {
         let f = OrganizationFixture(); defer { f.cleanup() }
         let a = try f.write("Documents/Nested/note.txt")

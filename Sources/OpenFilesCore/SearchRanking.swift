@@ -31,8 +31,7 @@ public struct FileSearchQuery: Sendable {
         tokenGroups = groups.map { $0.map(Self.words) }
     }
     public static func words(_ text: String) -> [String] {
-        text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
-            .components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+        SearchTokenizer.tokens(text)
     }
     public func coverage(in text: String) -> Double {
         guard !groups.isEmpty else { return 0 }
@@ -47,6 +46,7 @@ public struct FileSearchQuery: Sendable {
         return Double(hits) / Double(groups.count)
     }
     public static func allows(_ url: URL) -> Bool {
+        if let library = FileRules.photoLibrary(containing: url), library != url.standardizedFileURL { return false }
         let excluded: Set<String> = ["library", "node_modules", "site-packages", "__pycache__", "deriveddata", "pods", "carthage", "vendor", "venv", "env", "dist", "build", "indexobjects"]
         let nestedInApp = url.pathComponents.dropLast().contains { $0.hasSuffix(".app") || $0.hasSuffix(".framework") || $0.hasSuffix(".bundle") }
         return !nestedInApp && !url.pathComponents.contains { $0.hasPrefix(".") || excluded.contains($0.lowercased()) || $0.lowercased().hasSuffix(".dist-info") || $0.lowercased().hasSuffix(".egg-info") }

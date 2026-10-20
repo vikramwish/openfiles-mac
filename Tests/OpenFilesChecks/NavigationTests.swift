@@ -13,11 +13,53 @@ private struct NoNavigationEmbedding: EmbeddingBackend {
 
 enum NavigationChecks {
     static let scenarios: [(String, () async throws -> Void)] = [
+        ("Photos libraries remain whole across browse, index, sync, search, and cleanup", photosLibraries),
         ("Natural-language metadata plans and prefix postings", queryPlans),
         ("Filesystem watcher delivers real file changes", fileEvents),
         ("Search, sync and smart groups preserve original bytes, names and modification dates", readOnlySafety),
         ("Persistent search without document reads, live groups, incremental create/edit/rename/delete", persistentSync)
     ]
+    static func photosLibraries() async throws {
+        let base = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("OpenFilesPhotos-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let root = base.appendingPathComponent("Pictures")
+        let photos = root.appendingPathComponent("Family.PHOTOSLIBRARY")
+        let originals = photos.appendingPathComponent("originals")
+        try FileManager.default.createDirectory(at: originals, withIntermediateDirectories: true)
+        let first = originals.appendingPathComponent("image-a.jpg"), second = originals.appendingPathComponent("image-b.jpg")
+        let bytes = Data("fixture image bytes".utf8)
+        try bytes.write(to: first); try bytes.write(to: second)
+        let browser = FileBrowser()
+        let items = try await browser.contents(of: root)
+        checkEqual(items.count, 1); checkEqual(items.first?.kind, "Photos Library")
+        checkEqual(items.first?.isPackage, true); checkEqual(items.first?.isFolder, false)
+        checkTrue(FileSearchQuery.allows(photos)); checkFalse(FileSearchQuery.allows(first))
+        let library = FileLibrary(directory: base.appendingPathComponent("Data"), embeddingFactory: { NoNavigationEmbedding() })
+        _ = try await library.load(); try await library.addRoot(root)
+        let report = try await library.scan()
+        checkEqual(report.state.files.count, 1); checkTrue(report.state.files.first?.isProject == true)
+        let found = await library.search("Family")
+        checkEqual(found.first?.url.path, photos.path); checkEqual(found.count, 1)
+        let synced = try await library.synchronizeChanges([first, photos])
+        checkEqual(synced.files.count, 1); checkEqual(synced.files.first?.url.path, photos.path)
+        let plan = try await library.previewOrganization(); checkTrue(plan.isEmpty)
+        let direct = FileLibrary(directory: base.appendingPathComponent("DirectData"), embeddingFactory: { NoNavigationEmbedding() })
+        _ = try await direct.load(); try await direct.addRoot(photos)
+        let directReport = try await direct.scan()
+        checkEqual(directReport.state.files.count, 1)
+        checkEqual(directReport.state.files.first?.url.resolvingSymlinksInPath().path, photos.resolvingSymlinksInPath().path)
+        let nested = FileLibrary(directory: base.appendingPathComponent("NestedData"), embeddingFactory: { NoNavigationEmbedding() })
+        _ = try await nested.load()
+        do { try await nested.addRoot(originals); failCheck("Photos library internals must not become an organization root") } catch {}
+        let records = try [first, second].map { url -> FileRecord in
+            let stamp = try FileStamp.read(url)
+            return FileRecord(id: UUID(), url: url, root: originals, size: stamp.size, modified: stamp.modified, isProject: false, sensitive: false, vector: nil)
+        }
+        let cleanup = CleanupService(directory: base.appendingPathComponent("CleanupData"))
+        let review = try await cleanup.preview(files: records, scope: originals)
+        checkTrue(review.files.isEmpty); checkEqual(review.skipped, 2)
+        checkEqual(try Data(contentsOf: first), bytes); checkEqual(try Data(contentsOf: second), bytes)
+    }
     static func fileEvents() async throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent("OpenFilesEvents-\(UUID())")
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
