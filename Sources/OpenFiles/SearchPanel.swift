@@ -225,13 +225,15 @@ final class SearchPanelController: NSObject, NSWindowDelegate {
         panel.contentView = host
         panel.onDismiss = { [weak self] in self?.hide(returnFocus: false) }
         store.dismiss = { [weak self] in self?.hide() }
-        store.browse = { [weak self] in self?.showBrowser() }
+        store.browse = { [weak self] in self?.showBrowser(section: .files) }
         store.preview = { [weak self] in self?.showPreview() }
         store.resize = { [weak self] expanded in self?.resize(expanded) }
         shortcut.action = { [weak self] in self?.toggle() }
         store.shortcutAvailable = shortcut.register()
         model.showSearch = { [weak self] in self?.show() }
-        model.showWorkspace = { [weak self] in self?.showBrowser() }
+        model.showWorkspace = { [weak self] in
+            guard let self else { return }; self.showBrowser(section: self.model.section)
+        }
         model.newWorkspace = { [weak self] in self?.newBrowserWindow() }
     }
     func show() {
@@ -256,18 +258,20 @@ final class SearchPanelController: NSObject, NSWindowDelegate {
         let height: CGFloat = min(expanded ? 540 : 240, visible.height - 40)
         panel.setFrame(NSRect(x: panel.frame.minX, y: max(visible.minY + 20, top - height), width: panel.frame.width, height: height), display: true)
     }
-    func showBrowser() {
+    func showBrowser(section: AppModel.Section? = nil) {
         hide(returnFocus: false)
         if let window = lastWorkspace, workspaces[ObjectIdentifier(window)] != nil {
+            if let section { workspaces[ObjectIdentifier(window)]?.model.section = section }
             if window.isMiniaturized { window.deminiaturize(nil) }
             NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
-        } else { newBrowserWindow() }
+        } else { newBrowserWindow(section: section ?? .home) }
     }
-    func newBrowserWindow(folder: URL? = nil) {
+    func newBrowserWindow(folder: URL? = nil, section: AppModel.Section = .home) {
         hide(returnFocus: false)
         let previous = lastWorkspace.flatMap { workspaces[ObjectIdentifier($0)]?.model }
         let workspace = AppModel(sharing: model)
         workspace.navigate(to: folder ?? previous?.currentFolder ?? model.currentFolder)
+        workspace.section = section
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1260, height: 820), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "OpenFiles"; window.titlebarAppearsTransparent = true
         window.minSize = NSSize(width: 980, height: 680); window.isReleasedWhenClosed = false
@@ -316,9 +320,10 @@ final class SearchPanelController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true); previewWindow?.makeKeyAndOrderFront(nil)
     }
     func shutdown() async {
-        await cloudModel.shutdown()
+
         shortcut.unregister(); store.stop()
         for entry in workspaces.values { entry.model.closeWorkspace() }
+        await cloudModel.shutdown()
     }
 }
 

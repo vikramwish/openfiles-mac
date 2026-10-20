@@ -1,10 +1,12 @@
 import SwiftUI
 import OpenFilesCloud
 
+private typealias CloudViewState<Value> = SwiftUI.State<Value>
+
 @MainActor
 struct CloudBrowserView: View {
     @ObservedObject var model: CloudBrowserModel
-    @State private var showingSyncReport = false
+    @CloudViewState private var showingSyncReport = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {

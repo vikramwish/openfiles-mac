@@ -62,7 +62,7 @@ struct Runner {
             catch { failCheck("\(name): \(error.localizedDescription)"); try? suite.tearDownWithError() }
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
         }
-        for (name, check) in IndexChecks.scenarios + NavigationChecks.scenarios + ImageContentChecks.scenarios + OrganizationChecks.scenarios + EmbeddingGemmaChecks.scenarios {
+        for (name, check) in IndexChecks.scenarios + NavigationChecks.scenarios + ImageContentChecks.scenarios + OrganizationChecks.scenarios + EmbeddingGemmaChecks.scenarios + DocumentPackChecks.scenarios + AutomaticHistoryChecks.scenarios + CleanupChecks.scenarios {
             let previous = log.failures
             do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
@@ -81,6 +81,9 @@ struct Runner {
         scenarioCount += OrganizationChecks.scenarios.count
         scenarioCount += EmbeddingGemmaChecks.scenarios.count
         scenarioCount += VersionChecks.scenarios.count
+        scenarioCount += DocumentPackChecks.scenarios.count
+        scenarioCount += AutomaticHistoryChecks.scenarios.count
+        scenarioCount += CleanupChecks.scenarios.count
         print("\(scenarioCount) core scenarios; \(log.failures) failures")
         exit(log.failures == 0 ? 0 : 1)
     }
