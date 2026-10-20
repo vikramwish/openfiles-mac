@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var model: AppModel?
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        SemanticSearchService.shared.stop()
         guard let model else { return .terminateNow }
         Task {
             do { _ = try await model.vault.lock(); sender.reply(toApplicationShouldTerminate: true) }

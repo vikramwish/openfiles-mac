@@ -30,6 +30,7 @@ OpenFiles opens directly into your home folder. **No folder connection or import
 - Double-click a folder to browse it inside OpenFiles, or a file to open its default editor. Back/forward, parent-folder navigation, clickable breadcrumbs, and **Go to folder** (⌘⇧G) work without Finder.
 - **Search this Mac** searches Spotlight's indexed local volumes by filename and content. You can switch to the current folder. Results arrive while background semantic indexing is running. Search shows up to 1,000 Spotlight matches and the top 100 semantic matches; narrow your query to see other matches.
 - English semantic indexing starts automatically for your home folder, prioritizing Downloads, Documents, Desktop, Pictures, Music, and Movies. The prototype embeds up to 2,000 files; **this cap does not limit folder browsing or the scope of Spotlight search**. Apple’s model must be available for semantic results.
+- **Hybrid semantic engine:** on the first search, the app also starts a local Python service (`finder_search/`) that embeds documents, photos, and videos with Hugging Face models — BGE-small for text chunks and SigLIP2 for images and sampled video frames, all on-device via ONNX. Its results appear first in semantic matches, and it has no 2,000-file cap. The engine lives in the repo checkout (default `~/Desktop/OpenFiles`); point the `semanticSearchRoot` user default elsewhere if you move it. If the engine is missing, search falls back to Apple's model and Spotlight without changes.
 - Select an item and press Return to open it or Space for a Quick Look preview. Right-click for preview, enclosing-folder navigation, copy path, or commit. ⌘⇧N creates a folder; ⌘⇧. toggles hidden files.
 - macOS still enforces folder permissions. Protected folders may require approval in macOS or Full Disk Access. Spotlight excludes locations the OS or user has excluded from indexing. You can still browse accessible unindexed folders directly.
 
@@ -71,7 +72,8 @@ This is an unsandboxed, locally signed developer app. macOS may ask for access t
 
 - UI and application state: `Sources/OpenFiles/`
 - Search, file rules, snapshots, filesystem boundaries, vault: `Sources/OpenFilesCore/`
-- Tests: `Tests/OpenFilesChecks/`
+- Hybrid semantic engine (Python: BGE + SigLIP2 on-device embeddings): `finder_search/`, `tests/test_basic.py`, `run.sh`, `requirements.txt`
+- Tests: `Tests/OpenFilesChecks/` (Swift) and `tests/test_basic.py` (Python)
 - Build/run: `scripts/` and `Makefile`
 - Architecture and implementation sequence: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Collaboration conventions: [CONTRIBUTING.md](CONTRIBUTING.md)

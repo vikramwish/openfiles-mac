@@ -32,6 +32,7 @@ final class AppModel: ObservableObject {
     @Published var previewItem: BrowserItem?
     let browser = FileBrowser()
     private let systemSearch = SystemSearch()
+    private let semanticService = SemanticSearchService.shared
     private var folderItems: [BrowserItem] = []
     private var spotlightItems: [BrowserItem] = []
     private var semanticItems: [BrowserItem] = []
@@ -173,9 +174,14 @@ final class AppModel: ObservableObject {
             guard !Task.isCancelled, searchGeneration == token else { return }
             searchingSystem = true
             systemSearch.search(text, folder: searchThisFolder ? currentFolder : nil)
+            // Hybrid semantic results: the local BGE/SigLIP2 service covers
+            // documents, photos and videos; the built-in NLEmbedding index is
+            // the English-text fallback. Service results come first.
+            var urls = await semanticService.search(text)
             let found = await library.search(text)
-            let urls = found.prefix(100).map(\.url).filter { !searchThisFolder || FileRules.contains(currentFolder, $0) }
-            let items = await browser.items(at: urls)
+            urls.append(contentsOf: found.map(\.url))
+            let scoped = urls.filter { !searchThisFolder || FileRules.contains(currentFolder, $0) }
+            let items = await browser.items(at: Array(scoped.prefix(150)))
             guard !Task.isCancelled, searchGeneration == token else { return }
             semanticItems = items; mergeSearchResults()
         }
