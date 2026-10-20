@@ -148,7 +148,7 @@ struct AgentPanelView: View {
                 }.buttonStyle(.borderless)
                 Toggle("Send content previews: text excerpts and downscaled images", isOn: $model.agentIncludeExcerpts)
                 DisclosureGroup("What is sent to the model service") {
-                    Text("File names, folder paths, sizes and your request. With previews enabled, the first 400 characters of small text files are included, and up to four image files are attached as downscaled JPEG previews (~1024 px) so screenshots can be renamed from what they show. Potentially sensitive files and excerpts are excluded before anything is sent. Nothing is applied automatically; every action waits for your approval, and each change is re-verified against the file it came from.")
+                    Text("File names, folder paths, sizes and your request. With previews enabled, the first 400 characters of small text files are included, and up to sixteen image files are attached as downscaled JPEG previews (~1024 px) so screenshots can be renamed from what they show. Potentially sensitive files and excerpts are excluded before anything is sent. Nothing is applied automatically; every action waits for your approval, and each change is re-verified against the file it came from.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 4)
                 }
                 if let connection = model.agentConnection { Text(connection).font(.caption).foregroundStyle(.secondary) }

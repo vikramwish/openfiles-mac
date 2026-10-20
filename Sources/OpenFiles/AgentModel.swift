@@ -111,10 +111,10 @@ extension AppModel {
         let entries = await entriesWithPreviews(agentEntries())
         var parts: [AgentContentPart] = []
         if agentIncludeExcerpts {
-            // Downscaled previews of up to 4 image files let the model rename screenshots from what they show.
+            // Downscaled previews of up to 16 image files let the model rename every screenshot in view.
             let imageCandidates = entries
                 .filter { AgentImagePreview.isVisionCandidate(path: $0.url.path, bytes: $0.bytes) }
-                .prefix(4).map(\.url)
+                .prefix(16).map(\.url)
             if !imageCandidates.isEmpty {
                 let previews = await Task.detached(priority: .utility) { () -> [AgentContentPart] in
                     var result: [AgentContentPart] = []

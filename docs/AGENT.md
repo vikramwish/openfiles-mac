@@ -10,7 +10,7 @@ Open **Ask Hermes…** in the browser toolbar, or choose **Ask Hermes about file
 - **Moves** — move a file into a destination folder. The preview refuses sensitive files, symbolic links, files outside your personal folders, protected/system locations and destinations outside your scope; applying re-verifies stamps and digests, never replaces an existing file (a suffixed copy is proposed instead), and removes the original only after the copy is verified.
 - **Navigation** — open a folder in the browser so you can inspect what the agent found.
 
-The agent cannot invent paths, touch files outside your personal folders, act on sensitive files, or apply anything on its own. Unknown action kinds are refused and reported, and plans are capped at 12 actions.
+The agent cannot invent paths, touch files outside your personal folders, act on sensitive files, or apply anything on its own. Unknown action kinds are refused and reported, and plans are capped at 48 actions. When you ask for all files to be renamed, the model covers every file in view, one action each.
 
 ## Collections
 
@@ -24,7 +24,7 @@ The API key is stored only in the macOS **Keychain** (like cloud registration fi
 
 ## Screenshots and other images
 
-With **content previews** enabled (the default), up to four image files in the current folder (≤ 10 MB each) are downscaled locally to ~1024 px JPEG previews and attached to the request in the OpenAI-compatible `image_url` format, so the model can rename screenshots from what they show. The original files never leave your Mac; only the downscaled previews are sent, and the rename keeps the original image extension. Applying still runs the reviewed rename flow (5 MB readable-content cap applies to the source file).
+With **content previews** enabled (the default), up to sixteen image files in the current folder (≤ 10 MB each) are downscaled locally to ~1024 px JPEG previews and attached to the request in the OpenAI-compatible `image_url` format, so the model can rename screenshots — all of them, when you ask — from what they show. The original files never leave your Mac; only the downscaled previews are sent, and the rename keeps the original image extension. Applying verifies the file by stamp and digest without re-reading its content, so large screenshots are not limited by the 5 MB suggestion cap.
 
 ## What is sent
 

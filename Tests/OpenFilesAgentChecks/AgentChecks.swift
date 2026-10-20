@@ -34,7 +34,7 @@ enum AgentChecks {
             ["kind": "navigate", "folder": "/tmp/OpenFilesAgent/Travel"],
             ["kind": "navigate", "folder": "/tmp/OpenFilesAgent/Travel"]
         ]
-        for index in 0..<30 { actions.append(["kind": "navigate", "folder": "/tmp/OpenFilesAgent/folder-\(index)"]) }
+        for index in 0..<60 { actions.append(["kind": "navigate", "folder": "/tmp/OpenFilesAgent/folder-\(index)"]) }
         let data = try JSONSerialization.data(withJSONObject: ["actions": actions])
         guard let plan = AgentPlanCodec.decode(data) else { throw CheckFailure("plan should decode") }
         try expect(plan.actions.count == AgentPlan.actionLimit, "plan is capped at \(AgentPlan.actionLimit) actions, got \(plan.actions.count)")

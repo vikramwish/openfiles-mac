@@ -25,6 +25,10 @@ if [[ "${OPENFILES_MLX:-0}" == "1" ]]; then
         ditto "$resource" "$app_path/Contents/Resources/$(basename "$resource")"
     done
 fi
-codesign --force --deep --sign - "$app_path"
+# A stable signing identity keeps macOS folder-access and Keychain grants across rebuilds;
+# ad-hoc signing looks like a new app every time, so the system re-asks for permission.
+identity="$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/^[[:space:]]*[0-9]*) [A-F0-9]* "\(.*\)".*/\1/p' | head -1)"
+if [[ -z "$identity" ]]; then identity="-"; fi
+codesign --force --deep --sign "$identity" "$app_path"
 touch "$app_path"
 echo "Built $app_path"
