@@ -11,13 +11,14 @@ public struct ImageContentIndex: Codable, Hashable, Sendable {
     public let revision: String
     public let subjects: [ImageSubject]
     public let textTerms: [String]
+    public var location: PhotoLocation? = nil
     public var subjectTerms: Set<String> { Set(subjects.flatMap { FileSearchQuery.words($0.name) }) }
 }
 
 /// Background-only, local pixel analysis. Source files are never rewritten or uploaded.
 enum NativeImageContent {
     static let extensions: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "tif", "tiff", "gif", "bmp", "webp"]
-    static var revision: String { "vision-c\(VNClassifyImageRequest.currentRevision)-ocr\(VNRecognizeTextRequest.currentRevision)-2048-025-v1" }
+    static var revision: String { "vision-c\(VNClassifyImageRequest.currentRevision)-ocr\(VNRecognizeTextRequest.currentRevision)-2048-025-location-v2" }
     static func extract(_ url: URL, size: Int64) throws -> ExtractedText {
         guard size <= 50 * 1024 * 1024 else { return ExtractedText(detail: "Filename only: image exceeds 50 MB") }
         return try autoreleasepool {
@@ -44,7 +45,7 @@ enum NativeImageContent {
                 guard let candidate = observation.topCandidates(1).first, candidate.confidence >= 0.5 else { return nil }
                 return candidate.string
             }.joined(separator: "\n").prefix(12000))
-            let content = ImageContentIndex(revision: revision, subjects: subjects, textTerms: Array(Set(FileSearchQuery.words(recognized).prefix(6000))).sorted())
+            let content = ImageContentIndex(revision: revision, subjects: subjects, textTerms: Array(Set(FileSearchQuery.words(recognized).prefix(6000))).sorted(), location: PhotoLocation.read(source))
             let searchable = (subjects.map(\.name) + [recognized]).joined(separator: "\n")
             return ExtractedText(text: searchable, bytes: size, read: true,
                 detail: "Image content: \(subjects.count) subjects + \(content.textTerms.count) OCR terms · on device · 2048 px thumbnail", imageContent: content)

@@ -22,6 +22,7 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 Group {
                     switch model.section {
+                    case .cleanup: CleanupView(model: model.cleanup)
                     case .home: HomeView(packs: model.packs)
                     case .packs: DocumentPacksView(packs: model.packs)
                     case .protection: ProtectionView(model: model.protection, openHistory: { model.showVersionPanel(for: $0) })
