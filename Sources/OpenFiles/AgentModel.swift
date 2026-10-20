@@ -99,6 +99,12 @@ extension AppModel {
         collectionSuggestions = nil
     }
 
+    /// nil when the endpoint has not told us which modalities the model accepts — then image
+    /// requests are attempted anyway rather than blocked.
+    func modelSeesImages() -> Bool? {
+        agentModelOptions.first(where: { $0.id == agentModel })?.seesImages
+    }
+
     func requestAgentPlan(_ instruction: String) async {
         let instruction = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !instruction.isEmpty else { return }
@@ -130,6 +136,12 @@ extension AppModel {
         }
         let prompt = AgentPrompt.userPrompt(instruction: instruction, currentFolder: currentFolder, selection: selectedURL, entries: entries, includeExcerpts: agentIncludeExcerpts)
         parts.insert(.text(prompt), at: 0)
+        // Refuse image requests to models known to be text-only instead of surfacing a raw provider 404.
+        let carriesImages = parts.contains { if case .imageData = $0 { return true }; return false }
+        if carriesImages, modelSeesImages() == false {
+            agentError = "\(agentModel) cannot see images. Open settings, choose Load models and pick a vision-capable model (marked ✦), or turn off content previews for this request."
+            return
+        }
         do {
             let content = try await client.chat(model: agentModel, system: AgentPrompt.systemPrompt(), parts: parts)
             guard let data = AgentPlanCodec.extractJSON(in: content), let plan = AgentPlanCodec.decode(data) else {

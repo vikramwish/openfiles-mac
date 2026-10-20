@@ -109,9 +109,12 @@ enum AgentChecks {
             return false
         }
         let listing = AgentClient(base: URL(string: "http://127.0.0.1:1234/v1")!, apiKey: nil,
-                                  transport: MockTransport([Reply(#"{"data":[{"id":"z-ai/glm-5.3"},{"id":"qwen/qwen3.5-9b"}]}"#)]))
+                                  transport: MockTransport([Reply(#"{"data":[{"id":"z-ai/glm-4.5v","architecture":{"input_modalities":["text","image"]}},{"id":"qwen/qwen3.5-9b","architecture":{"input_modalities":["text"]}},{"id":"local-model"}]}"#)]))
         let models = try await listing.models()
-        try expect(models == ["qwen/qwen3.5-9b", "z-ai/glm-5.3"], "models parsed and sorted")
+        try expect(models.map(\.id) == ["local-model", "qwen/qwen3.5-9b", "z-ai/glm-4.5v"], "models parsed and sorted")
+        try expect(models.first { $0.id == "z-ai/glm-4.5v" }?.seesImages == true, "vision capability detected")
+        try expect(models.first { $0.id == "qwen/qwen3.5-9b" }?.seesImages == false, "text-only models are flagged")
+        try expect(models.first { $0.id == "local-model" }?.seesImages == nil, "unknown modalities stay unknown")
     }
 
     private struct MoveFixture {

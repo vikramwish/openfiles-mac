@@ -135,9 +135,15 @@ struct AgentPanelView: View {
                     Button("Load models") { Task { await model.testAgentConnection() } }
                     if !model.agentModelOptions.isEmpty {
                         Picker("Available models", selection: $model.agentModel) {
-                            ForEach(model.agentModelOptions, id: \.self) { Text($0).tag($0) }
+                            ForEach(model.agentModelOptions) { info in
+                                Text(info.seesImages == true ? "\(info.id) ✦" : info.id).tag(info.id)
+                            }
                         }.frame(maxWidth: 240)
                     }
+                }
+                if model.agentModelOptions.contains(where: { $0.seesImages == true }) {
+                    Text("✦ can see images — required for renaming screenshots from what they show.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 HStack {
                     Text(model.agentHasKey ? "API key saved in Keychain" : "No API key saved")

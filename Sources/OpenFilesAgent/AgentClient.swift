@@ -1,5 +1,15 @@
 import Foundation
 
+/// One model the endpoint offers. `seesImages` is nil when the endpoint does not report
+/// input modalities (local servers), so image requests are still attempted for those.
+public struct AgentModelInfo: Sendable, Equatable, Identifiable {
+    public let id: String
+    public let seesImages: Bool?
+    public init(id: String, seesImages: Bool? = nil) {
+        self.id = id; self.seesImages = seesImages
+    }
+}
+
 public enum AgentClientError: LocalizedError {
     case transport(String)
     case provider(status: Int, body: String)
@@ -66,7 +76,9 @@ public struct AgentClient: Sendable {
         return content
     }
 
-    public func models() async throws -> [String] {
+    /// Models the endpoint offers. `seesImages` is nil when the endpoint does not report
+    /// input modalities, so local servers are never blocked on suspicion.
+    public func models() async throws -> [AgentModelInfo] {
         var request = URLRequest(url: base.appendingPathComponent("models"))
         request.httpMethod = "GET"
         if let apiKey { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
@@ -74,8 +86,20 @@ public struct AgentClient: Sendable {
         guard (200..<300).contains(response.statusCode) else {
             throw AgentClientError.provider(status: response.statusCode, body: String(data: data.prefix(500), encoding: .utf8) ?? "")
         }
-        struct List: Decodable { struct Item: Decodable { let id: String }; let data: [Item]? }
+        struct List: Decodable {
+            struct Item: Decodable {
+                struct Architecture: Decodable {
+                    let inputModalities: [String]?
+                    enum CodingKeys: String, CodingKey { case inputModalities = "input_modalities" }
+                }
+                let id: String
+                let architecture: Architecture?
+            }
+            let data: [Item]?
+        }
         guard let list = try? JSONDecoder().decode(List.self, from: data) else { return [] }
-        return (list.data ?? []).map(\.id).sorted()
+        return (list.data ?? [])
+            .map { AgentModelInfo(id: $0.id, seesImages: $0.architecture?.inputModalities.map { $0.contains("image") }) }
+            .sorted { $0.id < $1.id }
     }
 }

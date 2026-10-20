@@ -18,7 +18,7 @@ New collections suggest their own members. Creating a collection — or choosing
 
 ## Model service
 
-The panel speaks the OpenAI-compatible chat API. Presets cover **OpenRouter** (default, `https://openrouter.ai/api/v1`), the local **Hermes proxy** (`http://127.0.0.1:8645/v1`), and **LM Studio** (`http://127.0.0.1:1234/v1`); any compatible endpoint can be entered. The model is selectable; **Load models** lists the endpoint's models.
+The panel speaks the OpenAI-compatible chat API. Presets cover **OpenRouter** (default, `https://openrouter.ai/api/v1`), the local **Hermes proxy** (`http://127.0.0.1:8645/v1`), and **LM Studio** (`http://127.0.0.1:1234/v1`); any compatible endpoint can be entered. The model is selectable; **Load models** lists the endpoint's models and marks the ones that accept image input with ✦. Screenshot previews require such a vision-capable model — when the configured model is known to be text-only, the request is refused with instructions instead of failing at the provider.
 
 The API key is stored only in the macOS **Keychain** (like cloud registration fields) and is never written to library.json, UserDefaults or logs. **Import key from Hermes…** copies your existing `OPENROUTER_API_KEY` from the Hermes configuration (`~/.hermes/.env` or `~/.hermes/profiles/*/.env`) into Keychain. **Remove key** deletes it.
 

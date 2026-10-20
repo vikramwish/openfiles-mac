@@ -75,7 +75,7 @@ final class AppModel: ObservableObject {
     @Published var agentOutcomes: [String] = []
     @Published var agentError: String?
     @Published var agentConnection: String?
-    @Published var agentModelOptions: [String] = []
+    @Published var agentModelOptions: [AgentModelInfo] = []
     @Published var agentEndpointBase: String = UserDefaults.standard.string(forKey: "agentEndpointBase") ?? "https://openrouter.ai/api/v1" {
         didSet { UserDefaults.standard.set(agentEndpointBase, forKey: "agentEndpointBase") }
     }
