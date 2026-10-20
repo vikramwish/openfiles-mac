@@ -29,8 +29,9 @@ final class SystemSearch {
         self.query = query
         for name in [NSNotification.Name.NSMetadataQueryDidFinishGathering, NSNotification.Name.NSMetadataQueryDidUpdate, NSNotification.Name.NSMetadataQueryGatheringProgress] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: query, queue: .main) { [weak self] _ in
-                Task { @MainActor in
-                    guard let self, self.generation == token, let activeQuery = self.query else { return }
+                guard let self else { return }
+                Task { @MainActor [self] in
+                    guard self.generation == token, let activeQuery = self.query else { return }
                     activeQuery.disableUpdates()
                     let urls = (0..<min(activeQuery.resultCount, 1000)).compactMap { index -> URL? in
                         guard let item = activeQuery.result(at: index) as? NSMetadataItem, let path = item.value(forAttribute: NSMetadataItemPathKey) as? String else { return nil }
