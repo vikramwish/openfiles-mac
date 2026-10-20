@@ -44,7 +44,11 @@ public extension OrganizationContext {
             if !folders.isEmpty { reasons.append("Preserves your existing folder names: " + folders.joined(separator: "/") + ".") }
             else {
                 var votes: [String: Int] = [:]
-                for word in item.words { for key in anchorPostings[word] ?? [] { votes[key, default: 0] += 1 } }
+                let informative = item.words.filter { let count = anchorPostings[$0]?.count ?? 0; return count > 0 && count <= 128 }.sorted {
+                    let a = anchorPostings[$0]?.count ?? 0, b = anchorPostings[$1]?.count ?? 0
+                    return a == b ? $0 < $1 : a < b
+                }.prefix(16)
+                for word in informative { for key in anchorPostings[word] ?? [] { votes[key, default: 0] += 1 } }
                 let candidates = votes.filter { $0.value >= 2 }.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }.prefix(48).compactMap { anchors[$0.key] }
                 let ranked = candidates.compactMap { anchor -> (folders: [String], hits: [String], score: Double)? in
                     let hits = item.words.intersection(anchor.words).sorted()
