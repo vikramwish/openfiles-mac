@@ -73,7 +73,7 @@ struct RenameSuggestionView: View {
             do {
                 let result = try await model.library.applyRename(previewID: preview.id, name: name)
                 model.state = await model.library.current()
-                model.reloadFolder(); model.selectedURL = result.destination
+                model.refreshAfterRename(from: preview.source, to: result.destination)
                 model.status = "Renamed to \(result.destination.lastPathComponent)."
                 if let warning = result.indexWarning { model.error = warning }
                 dismiss()

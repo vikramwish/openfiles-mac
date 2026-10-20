@@ -461,6 +461,15 @@ final class AppModel: ObservableObject {
         showingGo = false; navigate(to: URL(fileURLWithPath: path, isDirectory: true))
     }
     func requestGo() { pathInput = currentFolder.path; showingGo = true }
+    func refreshAfterRename(from source: URL, to destination: URL) {
+        folderItems.removeAll { $0.url == source }
+        semanticItems.removeAll { $0.url == source }
+        spotlightItems.removeAll { $0.url == source }
+        browserItems.removeAll { $0.url == source }
+        reloadFolder()
+        search()
+        selectedURL = destination
+    }
     private func search() {
         searchTask?.cancel(); systemSearch.stop(); searchGeneration = UUID()
         spotlightItems = []; semanticItems = []; searchingSystem = false; searchResultCount = 0
