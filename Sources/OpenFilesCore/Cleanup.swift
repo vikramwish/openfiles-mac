@@ -63,6 +63,7 @@ public actor CleanupService {
     private var review: CleanupReview?
     private var exclusions: [URL] = []
     private var scanRoots: [URL] = []
+    private var digestCache: [String: (FileStamp, String)] = [:]
     public init(directory: URL, trash: any CleanupTrash = SystemCleanupTrash(), screenshotMetadata: any ScreenshotMetadataProvider = SystemScreenshotMetadata()) {
         appData = directory.canonical; self.trash = trash; self.screenshotMetadata = screenshotMetadata
     }
@@ -99,7 +100,7 @@ public actor CleanupService {
                 try Task.checkCancellation()
                 guard hashedBytes + stamp.size <= hashBudget else { plan.limited = true; continue }
                 hashedBytes += stamp.size
-                guard let digest = try? checkedDigest(file.url, stamp: stamp, scope: scope) else { plan.skipped += 1; continue }
+                guard let digest = try? checkedDigest(file.url, stamp: stamp, scope: scope, allowCache: true) else { plan.skipped += 1; continue }
                 plan.checked += 1
                 groups[digest, default: []].append(CleanupFile(id: UUID(), url: file.url, bytes: stamp.size, modified: stamp.modified, kind: .duplicate,
                     evidence: "Same size and SHA-256 file contents. Names, metadata and references may differ; review which copy to keep.", relatedURL: nil, stamp: stamp, digest: digest))
@@ -172,7 +173,7 @@ public actor CleanupService {
             guard plan.suggestions.count < 100 else { plan.limited = true; continue }
             guard hashedBytes + stamp.size <= hashBudget else { plan.limited = true; continue }
             hashedBytes += stamp.size
-            guard let digest = try? checkedDigest(file.url, stamp: stamp, scope: scope) else { continue }
+            guard let digest = try? checkedDigest(file.url, stamp: stamp, scope: scope, allowCache: true) else { continue }
             plan.suggestions.append(CleanupFile(id: UUID(), url: file.url, bytes: stamp.size, modified: stamp.modified, kind: kind, evidence: evidence, relatedURL: related, reviewScore: reviewScore, stamp: stamp, digest: digest))
         }
         if similarityComparisons >= 100_000 { plan.limited = true }
@@ -231,7 +232,7 @@ public actor CleanupService {
         return result
     }
     private func safeStamp(_ url: URL, scope: URL) throws -> FileStamp {
-        guard scanRoots.contains(where: { syncContains($0, url) }), url.standardizedFileURL.path == url.canonical.path,
+        guard scanRoots.contains(where: { syncContains($0, url) }), hasExpectedCanonicalPath(url),
               !syncContains(appData, url), !exclusions.contains(where: { syncContains($0, url) }) else { throw OpenFilesError.message("Excluded or redirected path") }
         var folderProtection: [String: Bool] = [:]
         guard SemanticOrganizer.exclusion(url, roots: scanRoots, output: appData, appData: appData, excluded: exclusions, folderProtection: &folderProtection) == nil else { throw OpenFilesError.message("App, project or protected file") }
@@ -248,10 +249,13 @@ public actor CleanupService {
             throw OpenFilesError.message("This screenshot was opened recently or tagged to keep. Review it again.")
         }
     }
-    private func checkedDigest(_ url: URL, stamp: FileStamp, scope: URL) throws -> String {
+    private func checkedDigest(_ url: URL, stamp: FileStamp, scope: URL, allowCache: Bool = false) throws -> String {
         guard try safeStamp(url, scope: scope) == stamp else { throw OpenFilesError.message("File changed since review") }
+        if allowCache, let cached = digestCache[url.path], cached.0 == stamp { return cached.1 }
         let digest = try FileIntegrity.digest(url)
         guard try safeStamp(url, scope: scope) == stamp else { throw OpenFilesError.message("File changed during verification") }
+        if digestCache.count > 10_000 { digestCache.removeAll() }
+        digestCache[url.path] = (stamp, digest)
         return digest
     }
 }

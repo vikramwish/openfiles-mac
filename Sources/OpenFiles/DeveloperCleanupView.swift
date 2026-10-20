@@ -4,6 +4,7 @@ import OpenFilesCore
 
 @MainActor
 final class DeveloperCleanupModel: ObservableObject {
+    var automaticScopes: [URL]?
     @Published private(set) var scope: URL?
     @Published private(set) var review: DeveloperCleanupReview?
     @Published var selected = Set<UUID>()
@@ -33,7 +34,12 @@ final class DeveloperCleanupModel: ObservableObject {
         task = Task {
             defer { busy = false }
             do {
-                let roots = chosen.map { [$0] } ?? MacScanScopes.reduce(MacScanScopes.defaults() + (await library.indexScopes()))
+                let roots: [URL]
+                if let chosen { roots = [chosen] }
+                else {
+                    let indexed = await library.indexScopes()
+                    roots = MacScanScopes.reduce(automaticScopes ?? (MacScanScopes.defaults() + indexed))
+                }
                 review = try await service.preview(scope: chosen ?? FileManager.default.homeDirectoryForCurrentUser, excluding: excluding, scopes: roots)
             }
             catch is CancellationError { error = "Scan cancelled. No files were changed." }
@@ -43,6 +49,9 @@ final class DeveloperCleanupModel: ObservableObject {
     func useEntireMac(excluding: [URL]) { scope = nil; analyze(excluding: excluding) }
     func prepareAutomatically(excluding: [URL]) {
         if scope == nil && review == nil && result == nil && !busy { analyze(excluding: excluding) }
+    }
+    func refreshAutomatically(excluding: [URL]) {
+        if scope == nil && selected.isEmpty && result == nil && !busy { analyze(excluding: excluding) }
     }
     func cancel() { task?.cancel() }
     func moveToTrash(excluding: [URL]) {

@@ -59,7 +59,7 @@ public enum SemanticOrganizer {
         guard let root = roots.filter({ FileRules.contains($0, source) }).min(by: { $0.path.count < $1.path.count }) else { return "Outside personal file scope" }
         if FileRules.contains(output, source) { return "Already organized" }
         if FileRules.contains(appData, source) || excluded.contains(where: { FileRules.contains($0, source) }) { return "Excluded location" }
-        guard source.standardizedFileURL.path == source.canonical.path else { return "Symbolic link" }
+        guard hasExpectedCanonicalPath(source) else { return "Symbolic link" }
         let protected = Set(["Library", "Applications", "System", "node_modules", "vendor", "build", "dist", "DerivedData", "venv", ".venv", "env", "__pycache__", "usr", "bin", "sbin", "etc", "dev", "private", "var", "opt"])
         let markers = [".git", ".hg", "Package.swift", "package.json", "Cargo.toml", "pyproject.toml", "pyvenv.cfg", "CMakeLists.txt", "go.mod", "pom.xml", "build.gradle"]
         var parent = source.deletingLastPathComponent()
@@ -97,7 +97,7 @@ extension FileLibrary {
             SemanticOrganizer.exclusion(file.url, roots: roots, output: output, appData: directory, excluded: state.indexSettings?.excludedFolders ?? [], folderProtection: &folderProtection) == nil
         }
         let references = snapshot.filter { FileRules.contains(output, $0.url) && !$0.sensitive && !$0.isProject }
-        let contexts = OrganizationContext.suggestions(for: Array(eligible.prefix(10_000)) + references.prefix(5_000), roots: [home] + roots)
+        let contexts = OrganizationContext.dynamicSuggestions(for: Array(eligible.prefix(10_000)) + references.prefix(5_000), roots: [home] + roots)
         result.deferred = max(0, eligible.count - 10_000)
         try Task.checkCancellation()
         guard semanticOrganizationGeneration == generation else { throw CancellationError() }
@@ -142,7 +142,7 @@ extension FileLibrary {
         guard var plan = semanticOrganizationPlan, plan.id == planID,
               let original = plan.suggestions.first(where: { $0.id == suggestionID }),
               !folders.isEmpty, folders.count <= 6,
-              folders.allSatisfy({ OrganizationContext.clean($0) == $0 && !$0.hasPrefix(".") && !$0.contains("/") && !$0.contains(":") }) else { throw OpenFilesError.message("Enter up to six folder names, separated by /. Hidden, sensitive or invalid names are not allowed.") }
+              folders.allSatisfy({ OrganizationContext.validatedFolderName($0) == $0 && !$0.hasPrefix(".") && !$0.contains("/") && !$0.contains(":") }) else { throw OpenFilesError.message("Enter up to six folder names, separated by /. Hidden, sensitive or invalid names are not allowed.") }
         let oldFolder = original.destination.deletingLastPathComponent()
         let replacement = folders.reduce(plan.destination) { $0.appendingPathComponent($1, isDirectory: true) }
         var reserved = Set(plan.suggestions.filter { $0.destination.deletingLastPathComponent() != oldFolder }.map { $0.destination.path.lowercased() })

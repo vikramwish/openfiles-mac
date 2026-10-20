@@ -59,12 +59,12 @@ struct Runner {
             exit(log.failures == 0 ? 0 : 1)
         }
         if CommandLine.arguments.contains("--organization") {
-            for (name, check) in OrganizationChecks.scenarios {
+            for (name, check) in OrganizationChecks.scenarios + DynamicMacChecks.scenarios {
                 let previous = log.failures
                 do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
                 print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
             }
-            print("\(OrganizationChecks.scenarios.count) organization scenarios; \(log.failures) failures")
+            print("\(OrganizationChecks.scenarios.count + DynamicMacChecks.scenarios.count) organization scenarios; \(log.failures) failures")
             exit(log.failures == 0 ? 0 : 1)
         }
         if CommandLine.arguments.contains("--photo-tools") {
@@ -92,12 +92,12 @@ struct Runner {
             exit(log.failures == 0 ? 0 : 1)
         }
         if CommandLine.arguments.contains("--cleanup") {
-            for (name, check) in CleanupChecks.scenarios + DeveloperCleanupChecks.scenarios {
+            for (name, check) in CleanupChecks.scenarios + DeveloperCleanupChecks.scenarios + DynamicMacChecks.scenarios {
                 let previous = log.failures
                 do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
                 print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
             }
-            print("\(CleanupChecks.scenarios.count + DeveloperCleanupChecks.scenarios.count) cleanup scenarios; \(log.failures) failures")
+            print("\(CleanupChecks.scenarios.count + DeveloperCleanupChecks.scenarios.count + DynamicMacChecks.scenarios.count) cleanup scenarios; \(log.failures) failures")
             exit(log.failures == 0 ? 0 : 1)
         }
         if CommandLine.arguments.contains("--versions") {
@@ -131,7 +131,7 @@ struct Runner {
             catch { failCheck("\(name): \(error.localizedDescription)"); try? suite.tearDownWithError() }
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
         }
-        for (name, check) in IndexChecks.scenarios + PipelineOptimizationChecks.scenarios + NavigationChecks.scenarios + PhotoToolChecks.scenarios + ScreenshotChecks.scenarios + PhotoSimilarityChecks.scenarios + ImageContentChecks.scenarios + OrganizationChecks.scenarios + DocumentPackChecks.scenarios + CollectionChecks.scenarios + AutomaticHistoryChecks.scenarios + CleanupChecks.scenarios + DeveloperCleanupChecks.scenarios {
+        for (name, check) in IndexChecks.scenarios + PipelineOptimizationChecks.scenarios + NavigationChecks.scenarios + PhotoToolChecks.scenarios + ScreenshotChecks.scenarios + PhotoSimilarityChecks.scenarios + ImageContentChecks.scenarios + OrganizationChecks.scenarios + DocumentPackChecks.scenarios + CollectionChecks.scenarios + AutomaticHistoryChecks.scenarios + CleanupChecks.scenarios + DeveloperCleanupChecks.scenarios + DynamicMacChecks.scenarios {
             let previous = log.failures
             do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")

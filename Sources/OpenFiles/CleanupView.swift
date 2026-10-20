@@ -6,6 +6,7 @@ import OpenFilesCore
 final class CleanupModel: ObservableObject {
     @Published var developerMode = false
     let developer: DeveloperCleanupModel
+    var automaticScopes: [URL]?
     @Published var scope: URL?
     @Published private(set) var review: CleanupReview?
     @Published var selected = Set<UUID>()
@@ -43,15 +44,20 @@ final class CleanupModel: ObservableObject {
             defer { busy = false }
             do {
                 let current = await library.current()
-                let roots = chosen.map { [$0] } ?? MacScanScopes.reduce(MacScanScopes.defaults() + (await library.indexScopes()))
+                let roots: [URL]
+                if let chosen { roots = [chosen] }
+                else {
+                    let indexed = await library.indexScopes()
+                    roots = MacScanScopes.reduce(automaticScopes ?? (MacScanScopes.defaults() + indexed))
+                }
                 review = try await service.preview(files: current.files, scope: chosen ?? FileManager.default.homeDirectoryForCurrentUser, excluding: excluding, scopes: roots)
             } catch is CancellationError { error = "Review cancelled. No files were changed." }
             catch { self.error = error.localizedDescription }
         }
     }
     func useEntireMac(excluding: [URL]) { scope = nil; analyze(excluding: excluding) }
-    func prepareAutomatically(excluding: [URL], includeDeveloper: Bool = true) {
-        if scope == nil && review == nil && result == nil && !busy { analyze(excluding: excluding) }
+    func prepareAutomatically(excluding: [URL], includeDeveloper: Bool = true, refreshFiles: Bool = false) {
+        if scope == nil && (review == nil || (refreshFiles && selected.isEmpty)) && result == nil && !busy { analyze(excluding: excluding) }
         if includeDeveloper { developer.prepareAutomatically(excluding: excluding) }
     }
     func cancel() { task?.cancel() }

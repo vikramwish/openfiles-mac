@@ -23,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             smokeRoot = root
             let fixtureModel = AppModel(directory: storage)
             fixtureModel.currentFolder = root
+            fixtureModel.cleanup.automaticScopes = [root]
+            fixtureModel.cleanup.developer.automaticScopes = [root]
             model = fixtureModel
         } else {
             smokeRoot = nil

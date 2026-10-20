@@ -11,7 +11,8 @@ public enum MacScanScopes {
             let volumes = fm.mountedVolumeURLs(includingResourceValuesForKeys: [.volumeIsLocalKey, .volumeIsReadOnlyKey], options: [.skipHiddenVolumes]) ?? []
             roots += volumes.filter {
                 $0.path.hasPrefix("/Volumes/") &&
-                (try? $0.resourceValues(forKeys: [.volumeIsLocalKey]).volumeIsLocal) == true
+                (try? $0.resourceValues(forKeys: [.volumeIsLocalKey]).volumeIsLocal) == true &&
+                (try? $0.resourceValues(forKeys: [.volumeIsReadOnlyKey]).volumeIsReadOnly) != true
             }
         }
         return reduce(roots.filter { fm.fileExists(atPath: $0.path) })

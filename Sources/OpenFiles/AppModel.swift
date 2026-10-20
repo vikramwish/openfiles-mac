@@ -60,6 +60,7 @@ final class AppModel: ObservableObject {
     private var needsReconciliation = false
     private var lastChange = Date.distantPast
     private var syncTask: Task<Void, Never>?
+    private var volumeObservers: [NSObjectProtocol] = []
     private var wakeObserver: NSObjectProtocol?
     private var versionPanel: NSPanel?
 
@@ -259,7 +260,7 @@ final class AppModel: ObservableObject {
         }
         await startFileSync()
         let cleanupExclusions = protection.state.locations.map(\.url) + packs.packs.flatMap(\.items).flatMap(\.attachments).map(\.url) + indexSettings.excludedFolders
-        cleanup.developer.prepareAutomatically(excluding: cleanupExclusions)
+        if !indexSettings.paused { cleanup.developer.prepareAutomatically(excluding: cleanupExclusions) }
         if !indexSettings.paused { startIndexing() }
         pollingTask = Task { [weak self] in
             var ticks = 0
@@ -297,7 +298,7 @@ final class AppModel: ObservableObject {
             do {
                 try await scan()
                 let exclusions = protection.state.locations.map(\.url) + packs.packs.flatMap(\.items).flatMap(\.attachments).map(\.url) + indexSettings.excludedFolders
-                cleanup.prepareAutomatically(excluding: exclusions, includeDeveloper: false)
+                cleanup.prepareAutomatically(excluding: exclusions, includeDeveloper: false, refreshFiles: true)
             } catch { status = "Indexing needs attention: \(error.localizedDescription)" }
         }
     }
@@ -317,6 +318,7 @@ final class AppModel: ObservableObject {
         await protection.stop()
         fileWatcher?.stop(); pollingTask?.cancel(); indexProgressTask?.cancel(); syncTask?.cancel()
         pendingChanges = []; needsReconciliation = false
+        for observer in volumeObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }; volumeObservers = []
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
         await library.cancelIndexing(); await syncTask?.value; await indexTask?.value; await library.waitForIndexingToStop()
     }
@@ -330,6 +332,23 @@ final class AppModel: ObservableObject {
         }
         fileWatcher = watcher
         syncStatus = watcher.start(roots: roots) ? "Live sync" : "Watcher unavailable · periodic reconciliation"
+        if volumeObservers.isEmpty {
+            for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
+                volumeObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        await self.library.enableDefaultDiscovery(home: FileManager.default.homeDirectoryForCurrentUser)
+                        self.indexScopes = await self.library.indexScopes()
+                        await self.startFileSync()
+                        if !self.indexSettings.paused {
+                            self.queueSync([], reconcile: true)
+                            let exclusions = self.protection.state.locations.map(\.url) + self.packs.packs.flatMap(\.items).flatMap(\.attachments).map(\.url) + self.indexSettings.excludedFolders
+                            self.cleanup.developer.refreshAutomatically(excluding: exclusions)
+                        }
+                    }
+                })
+            }
+        }
         if wakeObserver == nil {
             wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.queueSync([], reconcile: true) }

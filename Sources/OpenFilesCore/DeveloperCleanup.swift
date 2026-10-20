@@ -200,7 +200,7 @@ public actor DeveloperCleanupService {
     private func isLink(_ value: stat) -> Bool { value.st_mode & S_IFMT == S_IFLNK }
     private func cloud(_ url: URL) -> Bool { (try? url.resourceValues(forKeys: [.isUbiquitousItemKey]).isUbiquitousItem) == true }
     private func measure(_ root: URL, scope: URL, limit: Int) throws -> DeveloperTree {
-        guard scanRoots.contains(where: { syncContains($0, root) }), root.standardizedFileURL.path == root.canonical.path,
+        guard scanRoots.contains(where: { syncContains($0, root) }), hasExpectedCanonicalPath(root),
               !protected.contains(where: { syncContains(root, $0) || syncContains($0, root) }) else { throw OpenFilesError.message("Protected or redirected artifact") }
         let device = try info(root).st_dev
         var hash = SHA256(), bytes: Int64 = 0, count = 0
