@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import QuickLookUI
 import OpenFilesCore
+import OpenFilesCloud
 
 private typealias BrowserState<Value> = SwiftUI.State<Value>
 
@@ -67,16 +68,14 @@ struct BrowserView: View {
                     }
                 } else { fileList }
             }
-            if model.query.isEmpty {
-                Divider()
-                HStack {
-                    VolumeStorageView(url: model.currentFolder)
-                    Spacer()
-                    if let item = model.selectedItem, !item.isFolder, !item.isPackage {
-                        Button("Suggest Filename…") { model.renameItem = item }.disabled(item.sensitive)
-                    }
-                }.font(.caption).padding(10)
-            }
+            Divider()
+            HStack {
+                VolumeStorageView(url: model.currentFolder)
+                Spacer()
+                if let item = model.selectedItem, !item.isFolder, !item.isPackage {
+                    Button("Suggest Filename…") { model.renameItem = item }.disabled(item.sensitive)
+                }
+            }.font(.caption).padding(10)
         }
     }
     @ViewBuilder private var fileList: some View {

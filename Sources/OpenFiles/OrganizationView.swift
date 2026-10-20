@@ -112,7 +112,7 @@ struct OrganizationView: View {
                                     Toggle(isOn: Binding(get: { selection.contains(suggestion.id) }, set: { if $0 { selection.insert(suggestion.id) } else { selection.remove(suggestion.id) } })) {
                                         VStack(alignment: .leading, spacing: 5) {
                                             Text(suggestion.source.lastPathComponent).font(.body.weight(.medium)).foregroundStyle(.primary)
-                                            Text("From: " + suggestion.source.deletingLastPathComponent().lastPathComponent).lineLimit(1).truncationMode(.middle).help(suggestion.source.path)
+                                            Text("From: " + suggestion.source.path).lineLimit(1).truncationMode(.middle).help(suggestion.source.path)
                                             Label(suggestion.destination.deletingLastPathComponent().path.replacingOccurrences(of: preview.destination.path + "/", with: ""), systemImage: "arrow.turn.down.right").lineLimit(1).truncationMode(.middle).help(suggestion.destination.path)
                                             Button("Preview file…") { model.previewItem = BrowserItem(url: suggestion.source, isFolder: false, isPackage: false, size: 0, modified: .distantPast) }
                                                 .buttonStyle(.borderless).help("Preview this file without opening another app")
