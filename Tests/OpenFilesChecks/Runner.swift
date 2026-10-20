@@ -74,7 +74,14 @@ struct Runner {
         }
         do { try await VaultChecks().testEncryptedVaultRoundTrip() } catch { failCheck("Encrypted vault: \(error.localizedDescription)") }
         do { try await EmbeddingGemmaChecks.realModelIfRequested() } catch { failCheck("EmbeddingGemma 2: \(error.localizedDescription)") }
-        print("\(checks.count + IndexChecks.scenarios.count + VersionChecks.scenarios.count + NavigationChecks.scenarios.count + ImageContentChecks.scenarios.count + OrganizationChecks.scenarios.count + EmbeddingGemmaChecks.scenarios.count) core scenarios; \(log.failures) failures")
+        var scenarioCount = checks.count
+        scenarioCount += IndexChecks.scenarios.count
+        scenarioCount += NavigationChecks.scenarios.count
+        scenarioCount += ImageContentChecks.scenarios.count
+        scenarioCount += OrganizationChecks.scenarios.count
+        scenarioCount += EmbeddingGemmaChecks.scenarios.count
+        scenarioCount += VersionChecks.scenarios.count
+        print("\(scenarioCount) core scenarios; \(log.failures) failures")
         exit(log.failures == 0 ? 0 : 1)
     }
 }
