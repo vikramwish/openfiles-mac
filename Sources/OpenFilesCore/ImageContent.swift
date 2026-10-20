@@ -37,7 +37,10 @@ enum NativeImageContent {
             text.usesLanguageCorrection = false
             text.minimumTextHeight = 0.01
             let handler = VNImageRequestHandler(cgImage: image, options: [:])
-            try handler.perform([classification, text])
+            // Keep embedded photo metadata available even when an optional Vision model
+            // cannot run on this machine or for this image. Each analysis is independent.
+            try? handler.perform([classification])
+            try? handler.perform([text])
             let subjects = (classification.results ?? []).filter { $0.confidence >= 0.25 }
                 .sorted { $0.confidence > $1.confidence }.prefix(12)
                 .map { ImageSubject(name: $0.identifier.replacingOccurrences(of: "_", with: " "), confidence: $0.confidence) }
