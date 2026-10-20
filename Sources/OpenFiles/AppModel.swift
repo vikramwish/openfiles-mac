@@ -1,22 +1,36 @@
 import SwiftUI
 import AppKit
+import Combine
 import OpenFilesCore
 
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var state = LibraryState()
-    @Published var proposals: [MoveProposal] = []
-    @Published var vaultState = VaultState(exists: false, mounted: false)
+    @Published var state = LibraryState() {
+        didSet { if !receivingSharedState { serviceOwner?.state = state } }
+    }
+    @Published var proposals: [MoveProposal] = [] {
+        didSet { if !receivingSharedState { serviceOwner?.proposals = proposals } }
+    }
+    @Published var vaultState = VaultState(exists: false, mounted: false) {
+        didSet { if !receivingSharedState { serviceOwner?.vaultState = vaultState } }
+    }
     @Published var query = "" { didSet { search() } }
     @Published var busy = false
     @Published var status = "Your files. A little more findable."
     @Published var error: String?
     @Published var embeddingsAvailable = false
-    @Published var commitTarget: URL?
-    @Published var showingCommit = false
     @Published var section: Section = .files
     var showSearch: (() -> Void)?
     var showWorkspace: (() -> Void)?
+    var newWorkspace: (() -> Void)?
+    @Published var activeWorkspace: AppModel? {
+        didSet {
+            activeCommandChanges = activeWorkspace?.objectWillChange.sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+        }
+    }
+    private var activeCommandChanges: AnyCancellable?
     @Published var currentFolder = FileManager.default.homeDirectoryForCurrentUser
     @Published var browserItems: [BrowserItem] = []
     @Published var selectedURL: URL?
@@ -38,48 +52,76 @@ final class AppModel: ObservableObject {
     @Published var newFolderName = ""
     @Published var previewItem: BrowserItem?
     @Published var editingURL: URL?
+    @Published var syncStatus = "Loading local index"
+    private var fileWatcher: FileEventWatcher?
+    private var watchedRoots: [URL] = []
+    private var pendingChanges = Set<URL>()
+    private var needsReconciliation = false
+    private var lastChange = Date.distantPast
+    private var syncTask: Task<Void, Never>?
+    private var wakeObserver: NSObjectProtocol?
     private var versionPanel: NSPanel?
 
     func showVersionPanel(for url: URL) {
         editingURL = url
         if versionPanel == nil {
-            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 580),
+            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 660),
                                 styleMask: [.titled, .closable, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
             panel.title = "OpenFiles · Versions"
             panel.level = .floating
             panel.hidesOnDeactivate = false
             panel.isReleasedWhenClosed = false
             panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-            panel.minSize = NSSize(width: 320, height: 400)
+            panel.minSize = NSSize(width: 340, height: 460)
             let hosting = NSHostingView(rootView: EditingVersionsView().environmentObject(self))
             hosting.sizingOptions = []
-            hosting.frame = NSRect(x: 0, y: 0, width: 340, height: 580)
+            hosting.frame = NSRect(x: 0, y: 0, width: 380, height: 660)
             hosting.autoresizingMask = [.width, .height]
             panel.contentView = hosting
-            panel.setContentSize(NSSize(width: 340, height: 580))
+            panel.setContentSize(NSSize(width: 380, height: 660))
             panel.center()
             versionPanel = panel
         }
         versionPanel?.orderFrontRegardless()
     }
-    func commitFile(_ url: URL, message: String) {
-        Task { await perform {
-            self.state = try await self.library.commit(url, message: message)
-            self.status = "Version saved for \(url.lastPathComponent)."
-        } }
+    @Published var versionBusy = false {
+        didSet { if !receivingSharedState { serviceOwner?.versionBusy = versionBusy } }
     }
-    func restoreAndOpen(_ version: FileVersion) {
-        let panel = NSOpenPanel()
-        panel.title = "Open an earlier version"
-        panel.message = "Choose where to save the restored copy. Your current file stays unchanged. Save in your editor before switching."
-        panel.canChooseDirectories = true; panel.canChooseFiles = false
-        guard panel.runModal() == .OK, let folder = panel.url else { return }
-        Task { await perform {
-            let restored = try await self.library.exportVersion(version, into: folder)
-            _ = try await NSWorkspace.shared.open(restored, configuration: .init())
-            self.showVersionPanel(for: restored)
-            self.status = "Opened restored copy of \(version.name). Original file unchanged."
-        } }
+    @Published var versionFocus = UUID()
+    func reviewCommit(_ url: URL? = nil) {
+        let target = url ?? selectedItem?.url ?? editingURL
+        guard let target else { status = "Select a file to review and commit its changes."; showWorkspace?(); return }
+        editingURL = target
+        navigate(to: target.deletingLastPathComponent())
+        selectedURL = target
+        versionFocus = UUID()
+        showWorkspace?()
+    }
+    func commitChanges(_ review: VersionReview, selected: Set<String>, message: String) async throws {
+        guard !versionBusy else { throw OpenFilesError.message("Another version operation is finishing. Try again shortly.") }
+        versionBusy = true; defer { versionBusy = false }
+        state = try await library.commitChanges(review, selected: selected, message: message)
+        status = "Committed \(selected.count) changes · \(message)"
+    }
+    func cherryPick(_ review: VersionReview, selected: Set<String>, message: String) async throws {
+        guard !versionBusy else { throw OpenFilesError.message("Another version operation is finishing. Try again shortly.") }
+        versionBusy = true; defer { versionBusy = false }
+        state = try await library.cherryPick(review, selected: selected, message: message)
+        reloadFolder(); status = "Applied \(selected.count) selected changes. Recovery version saved automatically."
+    }
+    func restoreVersion(_ version: FileVersion, expectedDigest: String) async throws {
+        guard !versionBusy else { throw OpenFilesError.message("Another version operation is finishing. Try again shortly.") }
+        versionBusy = true; defer { versionBusy = false }
+        state = try await library.restoreVersion(version.id, expectedDigest: expectedDigest)
+        reloadFolder(); status = "Restored \(version.message). Previous saved work is in history."
+    }
+    func restoreSavedVersion(_ version: FileVersion) {
+        Task {
+            do {
+                let review = try await library.reviewChanges(version.source)
+                try await restoreVersion(version, expectedDigest: review.workingDigest)
+            } catch { self.error = error.localizedDescription }
+        }
     }
     let browser = FileBrowser()
     private let systemSearch = SystemSearch()
@@ -105,18 +147,25 @@ final class AppModel: ObservableObject {
 
     let library: FileLibrary
     let vault: EncryptedVault
+    private let storageDirectory: URL
+    private weak var serviceOwner: AppModel?
+    private var receivingSharedState = false
+    private var sharedSubscriptions = Set<AnyCancellable>()
     private var started = false
     private var searchTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
     enum Section: String, CaseIterable, Identifiable {
-        case files = "Browse files", organize = "Organize", history = "Version history", vault = "Private vault"
+        case files = "Browse files", cloud = "Cloud storage", organize = "Organize", history = "Version history", vault = "Private vault"
         var id: String { rawValue }
-        var icon: String { switch self { case .files: "square.grid.2x2"; case .organize: "tray.2"; case .history: "clock.arrow.circlepath"; case .vault: "lock.shield" } }
-        var subtitle: String { switch self { case .files: "Find the file you’re thinking of."; case .organize: "A place for everything, with you in control."; case .history: "Keep the moments that matter."; case .vault: "An encrypted home for private files." } }
+        var icon: String { switch self { case .files: "square.grid.2x2"; case .cloud: "cloud"; case .organize: "tray.2"; case .history: "clock.arrow.circlepath"; case .vault: "lock.shield" } }
+        var subtitle: String { switch self { case .files: "Find the file you’re thinking of."; case .cloud: "Browse Google Drive and OneDrive directly."; case .organize: "A place for everything, with you in control."; case .history: "Keep the moments that matter."; case .vault: "An encrypted home for private files." } }
     }
-    init(directory: URL? = nil) {
-        let folder = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("OpenFiles", isDirectory: true)
-        library = FileLibrary(directory: folder); vault = EncryptedVault(directory: folder)
+    init(directory: URL? = nil, sharing owner: AppModel? = nil) {
+        let folder = directory ?? owner?.storageDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("OpenFiles", isDirectory: true)
+        storageDirectory = folder
+        serviceOwner = owner
+        library = owner?.library ?? FileLibrary(directory: folder)
+        vault = owner?.vault ?? EncryptedVault(directory: folder)
         systemSearch.onUpdate = { [weak self] urls, gathering, count in
             guard let self, !self.query.isEmpty else { return }
             let token = self.searchGeneration, update = UUID()
@@ -129,12 +178,46 @@ final class AppModel: ObservableObject {
                 self.spotlightItems = items; self.mergeSearchResults()
             }
         }
+        if let owner {
+            mirror(owner.$state, to: \.state)
+            mirror(owner.$proposals, to: \.proposals)
+            mirror(owner.$vaultState, to: \.vaultState)
+            mirror(owner.$versionBusy, to: \.versionBusy)
+            mirror(owner.$indexing, to: \.indexing)
+            mirror(owner.$indexProgress, to: \.indexProgress)
+            mirror(owner.$indexSettings, to: \.indexSettings)
+            mirror(owner.$indexScopes, to: \.indexScopes)
+            mirror(owner.$embeddingsAvailable, to: \.embeddingsAvailable)
+            mirror(owner.$syncStatus, to: \.syncStatus)
+            showSearch = owner.showSearch
+            owner.$state.map { $0.versions.count }.removeDuplicates().dropFirst().sink { [weak self] _ in
+                self?.reloadFolder()
+            }.store(in: &sharedSubscriptions)
+            owner.$syncStatus.removeDuplicates().dropFirst().sink { [weak self] _ in
+                self?.reloadFolder()
+            }.store(in: &sharedSubscriptions)
+        }
+    }
+    private func mirror<Value>(_ publisher: Published<Value>.Publisher, to keyPath: ReferenceWritableKeyPath<AppModel, Value>) {
+        publisher.sink { [weak self] value in
+            guard let self else { return }
+            self.receivingSharedState = true
+            self[keyPath: keyPath] = value
+            self.receivingSharedState = false
+        }.store(in: &sharedSubscriptions)
+    }
+    func closeWorkspace() {
+        browseTask?.cancel(); searchTask?.cancel(); systemSearch.stop()
+        versionPanel?.close(); versionPanel?.contentView = nil; versionPanel = nil
+        sharedSubscriptions.removeAll()
     }
     func start() async {
+        if serviceOwner != nil { navigate(to: currentFolder); return }
         guard !started else { return }; started = true
         navigate(to: currentFolder)
         await perform {
             self.state = try await self.library.load()
+            if self.state.autoOrganize { try await self.library.setAutoOrganize(false); self.state = await self.library.current() }
             await self.library.enableDefaultDiscovery(home: FileManager.default.homeDirectoryForCurrentUser)
             self.vaultState = await self.vault.status()
             self.indexSettings = self.state.indexSettings ?? IndexSettings()
@@ -148,21 +231,16 @@ final class AppModel: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(300))
             }
         }
+        await startFileSync()
         if !indexSettings.paused { startIndexing() }
         pollingTask = Task { [weak self] in
+            var ticks = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
-                guard let self else { return }
-                if self.state.autoOrganize && !self.busy && !self.indexing && !self.indexSettings.paused {
-                    await self.perform {
-                        try await self.scan()
-                        _ = try await self.library.previewOrganization()
-                        let report = try await self.library.applyOrganization()
-                        self.state = await self.library.current(); self.reloadFolder(); self.search()
-                        self.status = "Automatically organized \(report.moved) files."
-                        if !report.errors.isEmpty { self.error = report.errors.joined(separator: "\n") }
-                    }
-                }
+                guard let self, !Task.isCancelled else { return }
+                ticks += 1
+                if ticks % 5 == 0 && !self.indexing && !self.indexSettings.paused { self.queueSync([], reconcile: true) }
+
             }
         }
     }
@@ -173,14 +251,17 @@ final class AppModel: ObservableObject {
         do { try await action() } catch { self.error = error.localizedDescription }
     }
     func scan() async throws {
+        if let serviceOwner { try await serviceOwner.scan(); return }
         indexing = true
         defer { indexing = false; indexProgress = library.indexMonitor.snapshot() }
         let report = try await library.scan()
         state = await library.current(); embeddingsAvailable = report.embeddingsAvailable; proposals = []; search()
         indexProgress = report.progress
+        await startFileSync()
         status = "\(state.files.count) files in semantic catalog · \(report.progress.reused) reused · \(report.progress.embedded) newly embedded" + (report.progress.limitReached ? " · semantic limit reached" : "")
     }
     func startIndexing() {
+        if let serviceOwner { serviceOwner.startIndexing(); return }
         guard !indexing, !indexSettings.paused else { return }
         indexing = true
         indexTask = Task {
@@ -189,6 +270,7 @@ final class AppModel: ObservableObject {
         }
     }
     func setIndexPaused(_ paused: Bool) {
+        if let serviceOwner { serviceOwner.setIndexPaused(paused); return }
         Task {
             do {
                 try await library.pauseIndexing(paused); indexSettings.paused = paused
@@ -198,8 +280,60 @@ final class AppModel: ObservableObject {
         }
     }
     func stopIndexing() { Task { await library.cancelIndexing() } }
-    func finishIndexingBeforeQuit() async { await library.cancelIndexing(); await indexTask?.value }
+    func finishIndexingBeforeQuit() async {
+        fileWatcher?.stop(); pollingTask?.cancel(); indexProgressTask?.cancel(); syncTask?.cancel()
+        pendingChanges = []; needsReconciliation = false
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
+        await library.cancelIndexing(); await syncTask?.value; await indexTask?.value; await library.waitForIndexingToStop()
+    }
+    private func startFileSync() async {
+        let roots = await library.indexScopes()
+        guard roots != watchedRoots else { return }
+        watchedRoots = roots
+        fileWatcher?.stop()
+        let watcher = FileEventWatcher { [weak self] urls, overflow in
+            Task { @MainActor in self?.queueSync(urls, reconcile: overflow) }
+        }
+        fileWatcher = watcher
+        syncStatus = watcher.start(roots: roots) ? "Live sync" : "Watcher unavailable · periodic reconciliation"
+        if wakeObserver == nil {
+            wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.queueSync([], reconcile: true) }
+            }
+        }
+    }
+    private func queueSync(_ urls: [URL], reconcile: Bool = false) {
+        pendingChanges.formUnion(urls); needsReconciliation = needsReconciliation || reconcile
+        if pendingChanges.count > 2000 { pendingChanges = []; needsReconciliation = true }
+        lastChange = Date()
+        guard syncTask == nil else { return }
+        syncTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.syncTask = nil }
+            while !Task.isCancelled && (!pendingChanges.isEmpty || needsReconciliation) {
+                do { try await Task.sleep(for: .milliseconds(800)) } catch { break }
+                if Date().timeIntervalSince(lastChange) < 0.7 { continue }
+                if indexSettings.paused { syncStatus = "Sync paused · changes queued"; continue }
+                let libraryBusy = await library.indexingIsRunning()
+                if indexing || libraryBusy { continue }
+                if needsReconciliation {
+                    needsReconciliation = false; startIndexing(); continue
+                }
+                let batch = pendingChanges; pendingChanges = []
+                syncStatus = "Syncing changed files"
+                do {
+                    state = try await library.synchronizeChanges(Array(batch))
+                    syncStatus = "Live sync · up to date"
+                } catch {
+                    if Task.isCancelled { break }
+                    pendingChanges.formUnion(batch); syncStatus = "Changes queued · retrying sync"
+                    try? await Task.sleep(for: .seconds(2))
+                }
+            }
+        }
+    }
     func updateIndexSettings(_ settings: IndexSettings) {
+        if let serviceOwner { serviceOwner.updateIndexSettings(settings); return }
         Task {
             do { try await library.configureIndexing(settings); indexSettings = settings; state = await library.current(); search() }
             catch { self.error = error.localizedDescription }
@@ -296,7 +430,7 @@ final class AppModel: ObservableObject {
     }
     func openSelected() { if let item = selectedItem { open(item) } }
     func previewSelected() { if let item = selectedItem { previewItem = item } }
-    func prepareCommit(_ item: BrowserItem) { commitTarget = item.url; showingCommit = true }
+    func prepareCommit(_ item: BrowserItem) { reviewCommit(item.url) }
     func createFolder() {
         Task { await perform {
             _ = try await self.browser.createFolder(in: self.currentFolder, name: self.newFolderName)
@@ -304,17 +438,10 @@ final class AppModel: ObservableObject {
         } }
     }
     func chooseCommit(project: Bool = false) {
-        let panel = NSOpenPanel(); panel.title = "Commit a saved file or project"; panel.message = "Save in your editor first. OpenFiles snapshots the saved file on disk."; panel.canChooseDirectories = project; panel.canChooseFiles = !project; panel.treatsFilePackagesAsDirectories = project
+        if selectedItem != nil || editingURL != nil { reviewCommit(); return }
+        let panel = NSOpenPanel(); panel.title = "Choose a file to version"; panel.canChooseDirectories = project; panel.canChooseFiles = !project; panel.treatsFilePackagesAsDirectories = project
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        commitTarget = url; showingCommit = true
-        NSApp.activate(ignoringOtherApps: true)
-    }
-    func commit(message: String) {
-        guard let target = commitTarget else { return }
-        Task { await perform {
-            self.state = try await self.library.commit(target, message: message)
-            self.showingCommit = false; self.commitTarget = nil; self.status = "Version saved for \(target.lastPathComponent)."
-        } }
+        reviewCommit(url)
     }
     func export(_ version: FileVersion) {
         let panel = NSOpenPanel(); panel.title = "Export a restored copy"; panel.canChooseDirectories = true; panel.canChooseFiles = false

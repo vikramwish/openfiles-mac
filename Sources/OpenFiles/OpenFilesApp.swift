@@ -2,12 +2,13 @@ import SwiftUI
 import AppKit
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     let model = AppModel()
     private var searchPanel: SearchPanelController?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         searchPanel = SearchPanelController(model: model)
+        searchPanel?.activeWorkspaceChanged = { [weak self] in self?.model.activeWorkspace = $0 }
         // Wait until SwiftUI finishes launching its menu-bar scene before taking key focus.
         Task { await model.start(); searchPanel?.show() }
     }
@@ -36,49 +37,59 @@ struct OpenFilesApp: App {
         MenuBarExtra("OpenFiles", systemImage: "folder.badge.gearshape") {
             MenuContents().environmentObject(model)
         }
-        .commands {
-            CommandMenu("Version History") {
-                Button("Show selected file’s history") {
-                    if let item = model.selectedItem { model.showVersionPanel(for: item.url) }
-                }.keyboardShortcut("h", modifiers: [.command, .option]).disabled(model.selectedItem == nil || model.selectedItem?.sensitive == true)
-                if let url = model.editingURL {
-                    Button("Versions for \(url.lastPathComponent)") { model.showVersionPanel(for: url) }
-                    Button("Commit saved changes for \(url.lastPathComponent)") { model.commitFile(url, message: "") }.disabled(model.busy)
-                }
-                Divider()
-                Button("All version history") { model.section = .history; model.showWorkspace?() }
-                Button("Commit file…") { model.chooseCommit() }.disabled(model.busy)
-                Button("Commit project folder…") { model.chooseCommit(project: true) }.disabled(model.busy)
-            }
-            CommandGroup(after: .newItem) {
-                Button("Search files…") { model.showSearch?() }.keyboardShortcut(.space, modifiers: [.command, .shift])
-                Button("Browse files…") { model.showWorkspace?() }
+        .commands { WorkspaceCommands(owner: model) }
+    }
+}
 
-                Button("Open location…") { model.chooseFolder() }.keyboardShortcut("o", modifiers: [.command, .shift])
-                Button("Go to folder…") { model.requestGo() }.keyboardShortcut("g", modifiers: [.command, .shift])
-                Button("New folder…") { model.showingNewFolder = true }.keyboardShortcut("n", modifiers: [.command, .shift])
-                Button("Parent folder") { model.up() }.keyboardShortcut(.upArrow, modifiers: .command)
-                Button("Back") { model.back() }.keyboardShortcut("[", modifiers: .command)
-                Button("Forward") { model.forward() }.keyboardShortcut("]", modifiers: .command)
-                Button("Show hidden files") { model.showHidden.toggle() }.keyboardShortcut(".", modifiers: [.command, .shift])
-                Button("Commit file…") { model.chooseCommit() }.keyboardShortcut("s", modifiers: [.command, .shift])
-                Button("Commit project folder…") { model.chooseCommit(project: true) }
-            }
+struct WorkspaceCommands: Commands {
+    @ObservedObject var owner: AppModel
+    private var model: AppModel { owner.activeWorkspace ?? owner }
+    var body: some Commands {
+        CommandGroup(replacing: .newItem) {
+            Button("New Window") { model.newWorkspace?() }.keyboardShortcut("n", modifiers: .command)
         }
+        CommandMenu("Version History") {
+            Button("Show selected file’s history") {
+                if let item = model.selectedItem { model.showVersionPanel(for: item.url) }
+            }.keyboardShortcut("h", modifiers: [.command, .option]).disabled(model.selectedItem == nil || model.selectedItem?.sensitive == true)
+            if let url = model.editingURL {
+                Button("Versions for \(url.lastPathComponent)") { model.showVersionPanel(for: url) }
+                Button("Review & commit \(url.lastPathComponent)") { model.showVersionPanel(for: url) }.disabled(model.busy)
+            }
+            Divider()
+            Button("All version history") { model.section = .history; model.showWorkspace?() }
+            Button("Commit file…") { model.chooseCommit() }.disabled(model.busy)
+            Button("Commit project folder…") { model.chooseCommit(project: true) }.disabled(model.busy)
+        }
+        CommandGroup(after: .newItem) {
+            Button("Search files…") { model.showSearch?() }.keyboardShortcut(.space, modifiers: [.command, .shift])
+            Button("Browse files…") { model.showWorkspace?() }
 
+            Button("Open location…") { model.chooseFolder() }.keyboardShortcut("o", modifiers: [.command, .shift])
+            Button("Go to folder…") { model.requestGo() }.keyboardShortcut("g", modifiers: [.command, .shift])
+            Button("New folder…") { model.showingNewFolder = true }.keyboardShortcut("n", modifiers: [.command, .shift]).disabled(model.section == .cloud)
+            Button("Parent folder") { model.up() }.keyboardShortcut(.upArrow, modifiers: .command).disabled(model.section == .cloud)
+            Button("Back") { model.back() }.keyboardShortcut("[", modifiers: .command).disabled(model.section == .cloud)
+            Button("Forward") { model.forward() }.keyboardShortcut("]", modifiers: .command).disabled(model.section == .cloud)
+            Button("Show hidden files") { model.showHidden.toggle() }.keyboardShortcut(".", modifiers: [.command, .shift]).disabled(model.section == .cloud)
+            Button("Commit file…") { model.chooseCommit() }.keyboardShortcut("s", modifiers: [.command, .shift])
+            Button("Commit project folder…") { model.chooseCommit(project: true) }
+        }
     }
 }
 
 struct MenuContents: View {
-    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var owner: AppModel
+    private var model: AppModel { owner.activeWorkspace ?? owner }
     var body: some View {
         Button("Search files…   ⌘⇧Space") { model.showSearch?() }
         Button("Browse files…") { model.section = .files; show() }
+        Button("New Window") { model.newWorkspace?() }.keyboardShortcut("n", modifiers: .command)
         Divider()
         if let url = model.editingURL {
             Text(url.lastPathComponent)
             Button("Versions for \(url.lastPathComponent)") { model.showVersionPanel(for: url) }
-            Button("Commit saved changes") { model.commitFile(url, message: "") }.disabled(model.busy)
+            Button("Review & commit changes") { model.showVersionPanel(for: url) }.disabled(model.busy)
             Divider()
         }
         Button("Commit file…") { show(); model.chooseCommit() }.disabled(model.busy)

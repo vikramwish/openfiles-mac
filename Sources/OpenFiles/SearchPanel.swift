@@ -18,6 +18,38 @@ final class SearchStore: ObservableObject {
     @Published var searching = false
     @Published var focusID = UUID()
     @Published var shortcutAvailable = true
+    @Published var grouping: FileGrouping = .folder { didSet { groupFilter = nil; selected = 0 } }
+    @Published var groupFilter: String? { didSet { selected = 0 } }
+    @Published var smartCollections: [SmartCollection] = []
+    @Published var syncSummary = "Loading index"
+    @Published var queryMilliseconds = 0.0
+    @Published var saveError: String?
+    private var revisionTask: Task<Void, Never>?
+    var visibleResults: [SearchResult] { results.filter { groupFilter == nil || groupKey($0) == groupFilter } }
+    var facets: [(key: String, label: String, count: Int)] {
+        let groups = Dictionary(grouping: results, by: { groupKey($0) })
+        return groups.map { (key: $0.key, label: grouping == .folder ? URL(fileURLWithPath: $0.key).lastPathComponent : $0.key, count: $0.value.count) }.sorted { $0.count == $1.count ? $0.key < $1.key : $0.count > $1.count }
+    }
+    func groupKey(_ result: SearchResult) -> String {
+        switch grouping {
+        case .folder: return result.item.url.deletingLastPathComponent().path
+        case .kind: return result.item.kind
+        case .month: return result.item.modified.formatted(.dateTime.year().month(.abbreviated))
+        }
+    }
+    func saveCollection() {
+        let input = NavigationQuery(text).grouping == nil ? text + " grouped by " + grouping.rawValue.lowercased() : text
+        Task {
+            do { smartCollections = try await model.library.saveSmartCollection(input); saveError = nil }
+            catch { saveError = error.localizedDescription }
+        }
+    }
+    func removeCollection(_ id: UUID) {
+        Task {
+            do { smartCollections = try await model.library.removeSmartCollection(id); saveError = nil }
+            catch { saveError = error.localizedDescription }
+        }
+    }
     private let model: AppModel
     private let spotlight = SystemSearch()
     private var task: Task<Void, Never>?
@@ -31,8 +63,8 @@ final class SearchStore: ObservableObject {
     var dismiss: (() -> Void)?
     var browse: (() -> Void)?
     var preview: (() -> Void)?
-    var selectedItem: BrowserItem? { results.indices.contains(selected) ? results[selected].item : nil }
-    var hasQuery: Bool { !FileSearchQuery(text).terms.isEmpty }
+    var selectedItem: BrowserItem? { visibleResults.indices.contains(selected) ? visibleResults[selected].item : nil }
+    var hasQuery: Bool { !NavigationQuery(text).isEmpty }
     init(model: AppModel) {
         self.model = model
         spotlight.onUpdate = { [weak self] urls, gathering, _ in
@@ -53,39 +85,59 @@ final class SearchStore: ObservableObject {
             }
         }
     }
+    private func cachedResults(_ input: String) -> [SearchResult] {
+        let start = ContinuousClock.now
+        let matches = model.library.searchCatalog.matches(input)
+        let duration = start.duration(to: .now).components
+        queryMilliseconds = Double(duration.seconds) * 1000 + Double(duration.attoseconds) / 1e15
+        return matches.map { match in
+            let file = match.file
+            return SearchResult(item: BrowserItem(url: file.url, isFolder: false, isPackage: file.isProject, size: file.size, modified: file.modified), score: match.score, reason: match.reason)
+        }
+    }
     func search() {
         task?.cancel(); updateTask?.cancel(); spotlight.stop(); generation = UUID()
-        results = []; local = []; system = []; selected = 0
+        system = []; selected = 0; groupFilter = nil
         localWorking = false; systemWorking = false
         resize?(hasQuery)
-        guard hasQuery else { searching = false; return }
-        searching = true; localWorking = true; systemWorking = true
-        let token = generation, input = text
+        guard hasQuery else { local = []; results = []; searching = false; return }
+        let plan = NavigationQuery(text)
+        if let mode = plan.grouping { grouping = mode }
+        // This is the primary path: cached postings + metadata, with no debounce or file I/O.
+        local = cachedResults(text); merge()
+        let token = generation, input = text, revision = model.library.searchCatalog.revision
         task = Task {
-            do { try await Task.sleep(for: .milliseconds(220)) } catch { return }
+            do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
             guard !Task.isCancelled else { return }
-            spotlight.search(input)
+            // Structured navigation stays on our index. Spotlight is supplemental for topics.
+            if !plan.hasFilters { systemWorking = true; spotlight.search(input) }
             let matches = await model.library.searchMatches(input)
-            let items = await model.browser.items(at: matches.prefix(100).map { $0.file.url })
             guard generation == token, !Task.isCancelled else { return }
-            let byURL = Dictionary(items.map { ($0.url, $0) }, uniquingKeysWith: { first, _ in first })
-            local = matches.compactMap { match in byURL[match.file.url].map { SearchResult(item: $0, score: match.score, reason: match.reason) } }
-            localWorking = false; merge()
-            // Spotlight can keep gathering on busy volumes; retain its live updates.
+            if model.library.searchCatalog.revision == revision {
+                let refined = matches.map { match in
+                    let file = match.file
+                    return SearchResult(item: BrowserItem(url: file.url, isFolder: false, isPackage: file.isProject, size: file.size, modified: file.modified), score: match.score, reason: match.reason)
+                }
+                // Preserve fast prefix matches while the user is still typing.
+                var refinedByURL = Dictionary(local.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                for result in refined { refinedByURL[result.id] = result }
+                local = Array(refinedByURL.values)
+            }
+            merge()
         }
     }
     private func merge() {
         let selectedID = selectedItem?.id
         var byPath: [String: SearchResult] = [:]
         for result in local + system {
-            let key = result.item.url.resolvingSymlinksInPath().standardizedFileURL.path
+            let key = result.item.url.standardizedFileURL.path
             if result.score > (byPath[key]?.score ?? -.infinity) { byPath[key] = result }
         }
         results = Array(byPath.values.sorted { $0.score == $1.score ? $0.item.url.path < $1.item.url.path : $0.score > $1.score }.prefix(100))
-        selected = selectedID.flatMap { id in results.firstIndex { $0.id == id } } ?? 0
+        selected = selectedID.flatMap { id in visibleResults.firstIndex { $0.id == id } } ?? 0
         searching = localWorking || systemWorking
     }
-    func move(_ delta: Int) { guard !results.isEmpty else { return }; selected = min(max(selected + delta, 0), results.count - 1) }
+    func move(_ delta: Int) { guard !visibleResults.isEmpty else { return }; selected = min(max(selected + delta, 0), visibleResults.count - 1) }
     func openSelected() {
         guard let item = selectedItem else { return }
         dismiss?()
@@ -96,8 +148,21 @@ final class SearchStore: ObservableObject {
         guard let item = selectedItem else { return }
         model.open(item, reveal: true); dismiss?(); browse?()
     }
-    func stop() { task?.cancel(); updateTask?.cancel(); spotlight.stop(); generation = UUID(); searching = false; localWorking = false; systemWorking = false }
-    func resume() { focusID = UUID(); if hasQuery { search() } }
+    func stop() { revisionTask?.cancel(); task?.cancel(); updateTask?.cancel(); spotlight.stop(); generation = UUID(); searching = false; localWorking = false; systemWorking = false }
+    func resume() {
+        focusID = UUID(); if hasQuery { search() }
+        revisionTask?.cancel()
+        revisionTask = Task {
+            smartCollections = await model.library.current().smartCollections ?? []
+            var revision = model.library.searchCatalog.revision
+            while !Task.isCancelled {
+                syncSummary = "\(model.library.searchCatalog.count) indexed · " + (model.indexSettings.paused ? "sync paused" : model.indexing ? "indexing" : model.syncStatus)
+                let next = model.library.searchCatalog.revision
+                if next != revision { revision = next; if hasQuery { local = cachedResults(text); merge() } }
+                do { try await Task.sleep(for: .milliseconds(300)) } catch { break }
+            }
+        }
+    }
 }
 
 private final class SearchPanel: NSPanel {
@@ -134,18 +199,21 @@ final class GlobalSearchShortcut {
 }
 
 @MainActor
-final class SearchPanelController {
+final class SearchPanelController: NSObject, NSWindowDelegate {
     let store: SearchStore
     private let panel: SearchPanel
     private let shortcut = GlobalSearchShortcut()
     private let model: AppModel
-    private var browserWindow: NSWindow?
+    private var workspaces: [ObjectIdentifier: (window: NSWindow, model: AppModel)] = [:]
+    private weak var lastWorkspace: NSWindow?
+    var activeWorkspaceChanged: ((AppModel?) -> Void)?
     private var previewWindow: NSWindow?
     private var previousApp: NSRunningApplication?
     init(model: AppModel) {
         self.model = model
         store = SearchStore(model: model)
         panel = SearchPanel(contentRect: NSRect(x: 0, y: 0, width: 740, height: 240), styleMask: [.borderless], backing: .buffered, defer: false)
+        super.init()
         panel.title = "Search OpenFiles"
         panel.level = .floating; panel.isFloatingPanel = true; panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
@@ -163,6 +231,7 @@ final class SearchPanelController {
         store.shortcutAvailable = shortcut.register()
         model.showSearch = { [weak self] in self?.show() }
         model.showWorkspace = { [weak self] in self?.showBrowser() }
+        model.newWorkspace = { [weak self] in self?.newBrowserWindow() }
     }
     func show() {
         if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
@@ -187,15 +256,51 @@ final class SearchPanelController {
         panel.setFrame(NSRect(x: panel.frame.minX, y: max(visible.minY + 20, top - height), width: panel.frame.width, height: height), display: true)
     }
     func showBrowser() {
-        hide()
-        if browserWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1260, height: 820), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
-            window.title = "OpenFiles"; window.titlebarAppearsTransparent = true; window.titleVisibility = .hidden
-            window.minSize = NSSize(width: 980, height: 680); window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: ContentView().environmentObject(model))
-            window.center(); browserWindow = window
+        hide(returnFocus: false)
+        if let window = lastWorkspace, workspaces[ObjectIdentifier(window)] != nil {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
+        } else { newBrowserWindow() }
+    }
+    func newBrowserWindow(folder: URL? = nil) {
+        hide(returnFocus: false)
+        let previous = lastWorkspace.flatMap { workspaces[ObjectIdentifier($0)]?.model }
+        let workspace = AppModel(sharing: model)
+        workspace.navigate(to: folder ?? previous?.currentFolder ?? model.currentFolder)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1260, height: 820), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.title = "OpenFiles"; window.titlebarAppearsTransparent = true
+        window.minSize = NSSize(width: 980, height: 680); window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.tabbingMode = .disallowed
+        window.contentView = NSHostingView(rootView: ContentView().environmentObject(workspace))
+        workspace.showWorkspace = { [weak window] in
+            guard let window else { return }
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
         }
-        NSApp.activate(ignoringOtherApps: true); browserWindow?.makeKeyAndOrderFront(nil)
+        workspace.newWorkspace = { [weak self, weak workspace] in self?.newBrowserWindow(folder: workspace?.currentFolder) }
+        if let previous = lastWorkspace {
+            window.cascadeTopLeft(from: NSPoint(x: previous.frame.minX + 24, y: previous.frame.maxY - 24))
+        } else { window.center() }
+        workspaces[ObjectIdentifier(window)] = (window, workspace)
+        lastWorkspace = window
+        activeWorkspaceChanged?(workspace)
+        NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
+    }
+    func windowDidBecomeMain(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, let entry = workspaces[ObjectIdentifier(window)] else { return }
+        lastWorkspace = window
+        activeWorkspaceChanged?(entry.model)
+    }
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              let entry = workspaces.removeValue(forKey: ObjectIdentifier(window)) else { return }
+        entry.model.closeWorkspace()
+        window.contentView = nil
+        if lastWorkspace === window {
+            lastWorkspace = workspaces.values.first?.window
+            activeWorkspaceChanged?(lastWorkspace.flatMap { workspaces[ObjectIdentifier($0)]?.model })
+        }
     }
     private func showPreview() {
         guard let item = store.selectedItem else { return }
@@ -209,7 +314,10 @@ final class SearchPanelController {
         previewWindow?.contentView = NSHostingView(rootView: FilePreview(url: item.url))
         NSApp.activate(ignoringOtherApps: true); previewWindow?.makeKeyAndOrderFront(nil)
     }
-    func shutdown() { shortcut.unregister(); store.stop() }
+    func shutdown() {
+        shortcut.unregister(); store.stop()
+        for entry in workspaces.values { entry.model.closeWorkspace() }
+    }
 }
 
 private struct SearchPanelView: View {
@@ -232,9 +340,25 @@ private struct SearchPanelView: View {
                 HStack {
                     Text(store.searching ? "SEARCHING YOUR MAC" : "\(store.results.count) RESULTS").tracking(1)
                     Spacer()
-                    Text(FileSearchQuery(store.text).text).lineLimit(1)
+                    Text(String(format: "%.1f ms", store.queryMilliseconds)).monospacedDigit()
+                    Menu {
+                        ForEach(FileGrouping.allCases, id: \.self) { mode in Button("By " + mode.rawValue.lowercased()) { store.grouping = mode } }
+                    } label: { Label("By " + store.grouping.rawValue.lowercased(), systemImage: "square.grid.2x2") }.menuStyle(.borderlessButton).frame(width: 110)
+                    Button { store.saveCollection() } label: { Image(systemName: "bookmark") }.buttonStyle(.borderless).help("Save this query as a live smart group").accessibilityLabel("Save live smart group")
                 }.font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary).padding(.horizontal, 24).padding(.top, 14).padding(.bottom, 8)
-                if store.results.isEmpty {
+                if !store.facets.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            Button("All · \(store.results.count)") { store.groupFilter = nil }
+                                .tint(store.groupFilter == nil ? .accentColor : .secondary)
+                            ForEach(store.facets.prefix(12), id: \.key) { facet in
+                                Button("\(facet.label) · \(facet.count)") { store.groupFilter = store.groupFilter == facet.key ? nil : facet.key }
+                                    .tint(store.groupFilter == facet.key ? .accentColor : .secondary).help(facet.key)
+                            }
+                        }.buttonStyle(.bordered).controlSize(.mini).padding(.horizontal, 20)
+                    }.padding(.bottom, 8)
+                }
+                if store.visibleResults.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: store.searching ? "doc.text.magnifyingglass" : "magnifyingglass").font(.system(size: 27, weight: .light)).foregroundStyle(.tertiary)
                         Text(store.searching ? "Looking for relevant files…" : "No confident matches").font(.system(size: 15, weight: .medium))
@@ -245,12 +369,12 @@ private struct SearchPanelView: View {
                     ScrollViewReader { reader in
                         ScrollView {
                             LazyVStack(spacing: 3) {
-                                ForEach(Array(store.results.enumerated()), id: \.element.id) { index, result in
+                                ForEach(Array(store.visibleResults.enumerated()), id: \.element.id) { index, result in
                                     resultRow(result, index: index).id(result.id)
                                 }
                             }.padding(.horizontal, 10).padding(.bottom, 10)
                         }.onChange(of: store.selected) { _, value in
-                            if store.results.indices.contains(value) { reader.scrollTo(store.results[value].id) }
+                            if store.visibleResults.indices.contains(value) { reader.scrollTo(store.visibleResults[value].id) }
                         }
                     }
                 }
@@ -258,16 +382,27 @@ private struct SearchPanelView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Your files, a few words away.").font(.system(size: 14, weight: .medium))
                     HStack(spacing: 8) {
-                        example("Australian government files")
-                        example("Invoices")
-                        example("Launch plan")
+                        example("Government files")
+                        example("PDFs this week")
+                        example("Images in Downloads")
                     }
-                    Text("Search by name or describe the contents.").font(.system(size: 11)).foregroundStyle(.secondary)
+                    if !store.smartCollections.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(store.smartCollections) { collection in
+                                    Button { store.text = collection.query } label: { Label(collection.query, systemImage: "bookmark").lineLimit(1) }
+                                        .buttonStyle(.borderless).font(.system(size: 11))
+                                        .contextMenu { Button("Remove saved group") { store.removeCollection(collection.id) } }
+                                }
+                            }
+                        }
+                    } else { Text("Search by topic, type, location, or modified date.").font(.system(size: 11)).foregroundStyle(.secondary) }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading).padding(.horizontal, 24)
             }
             Divider().opacity(0.6)
             HStack(spacing: 12) {
-                Image(systemName: "sparkle"); Text("OpenFiles").fontWeight(.medium)
+                Image(systemName: "lock.shield").help("Search, sync, and smart groups only read original files").accessibilityLabel("Read-only file search")
+                Text(store.syncSummary).lineLimit(1)
                 if !store.shortcutAvailable { Text("Shortcut unavailable — use menu bar").foregroundStyle(.secondary) }
                 Spacer()
                 if store.hasQuery { Text("↑↓ select   ↵ open").foregroundStyle(.secondary) }
@@ -278,6 +413,7 @@ private struct SearchPanelView: View {
             if reduceTransparency { Color(nsColor: .windowBackgroundColor) }
             else { Rectangle().fill(.regularMaterial) }
         }
+        .alert("Couldn’t save smart group", isPresented: Binding(get: { store.saveError != nil }, set: { if !$0 { store.saveError = nil } })) { Button("OK") { store.saveError = nil } } message: { Text(store.saveError ?? "") }
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.primary.opacity(0.12)))
     }

@@ -41,14 +41,16 @@ struct ExtractedText: Sendable {
     var bytes: Int64 = 0
     var read = false
     var detail = "Filename only: unsupported content format"
+    var imageContent: ImageContentIndex? = nil
 }
 
 enum IndexText {
     static let maxInputCharacters = 4000
     static func extract(_ url: URL, size: Int64) throws -> ExtractedText {
-        guard size <= 5 * 1024 * 1024 else { return ExtractedText(detail: "Filename only: content exceeds 5 MB") }
         let cloud = try url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
         if cloud.isUbiquitousItem == true && cloud.ubiquitousItemDownloadingStatus == .notDownloaded { return ExtractedText(detail: "Filename only: cloud file is not downloaded") }
+        if NativeImageContent.extensions.contains(url.pathExtension.lowercased()) { return try NativeImageContent.extract(url, size: size) }
+        guard size <= 5 * 1024 * 1024 else { return ExtractedText(detail: "Filename only: content exceeds 5 MB") }
         if url.pathExtension.lowercased() == "pdf" {
             return autoreleasepool {
                 guard let pdf = PDFDocument(url: url), !pdf.isLocked else { return ExtractedText(detail: "Filename only: PDF is locked or unreadable") }

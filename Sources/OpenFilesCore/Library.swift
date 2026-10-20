@@ -5,14 +5,17 @@ import PDFKit
 /// Serializes filesystem operations off the UI thread. No cloud services or API credentials.
 public actor FileLibrary {
     public let directory: URL
-    private var state = LibraryState()
+    var state = LibraryState()
     private var proposals: [MoveProposal] = []
+    var semanticOrganizationPlan: OrganizationPreview?
+    var semanticOrganizationGeneration = UUID()
     private var discoveryRoots: [URL] = []
     private let fm = FileManager.default
+    public nonisolated let searchCatalog = SearchCatalog()
     public nonisolated let indexMonitor = IndexMonitor()
     private let objects: EmbeddingObjects
     private let embeddingFactory: @Sendable () -> any EmbeddingBackend
-    private let queryBackend: any EmbeddingBackend
+    let queryBackend: any EmbeddingBackend
     private var queryCache: [String: [Double]] = [:]
     private var scanRunning = false
     private var control: IndexControl?
@@ -32,11 +35,12 @@ public actor FileLibrary {
                 state.files[index].vector = await objects.lookup(key, engine: meta.engine)?.vector
             }
         }
+        searchCatalog.replace(state.files)
         if let report = state.lastIndexReport { indexMonitor.publish(report) }
         return state
     }
     public func current() -> LibraryState { state }
-    private func save() throws {
+    func save() throws {
         try JSONEncoder().encode(state).write(to: manifest, options: .atomic)
         try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifest.path)
     }
@@ -54,9 +58,12 @@ public actor FileLibrary {
         do { try save() } catch { state.roots.removeLast(); throw error }
     }
     public func removeRoot(_ root: URL) throws {
-        state.roots.removeAll { $0 == root }; state.files.removeAll { $0.root == root }; proposals = []; try save()
+        state.roots.removeAll { $0 == root }; state.files.removeAll { $0.root == root }; searchCatalog.replace(state.files); proposals = []; try save()
     }
-    public func setAutoOrganize(_ enabled: Bool) throws { state.autoOrganize = enabled; try save() }
+    public func setAutoOrganize(_ enabled: Bool) throws {
+        guard !enabled else { throw OpenFilesError.message("Unattended organization is disabled. Preview and apply file moves manually.") }
+        state.autoOrganize = false; try save()
+    }
     public func authorized(_ url: URL) throws -> URL {
         let real = url.canonical
         guard state.roots.contains(where: { FileRules.contains($0, real) }), !FileRules.contains(directory, real) else { throw OpenFilesError.message("This file is outside the library.") }
@@ -76,6 +83,7 @@ public actor FileLibrary {
         settings.excludedFolders = settings.excludedFolders.map(\.canonical)
         state.indexSettings = settings
         state.files.removeAll { file in settings.excludedFolders.contains { FileRules.contains($0, file.url.canonical) } }
+        searchCatalog.replace(state.files)
         try save()
     }
     public func pauseIndexing(_ paused: Bool) throws {
@@ -87,6 +95,9 @@ public actor FileLibrary {
         indexMonitor.publish(progress); try save()
     }
     public func cancelIndexing() { control?.cancel() }
+    public func waitForIndexingToStop() async {
+        while scanRunning { try? await Task.sleep(for: .milliseconds(50)) }
+    }
     public func indexingIsRunning() -> Bool { scanRunning }
     public func indexScopes() -> [URL] { state.roots + discoveryRoots }
     public func scan() async throws -> ScanReport {
@@ -105,6 +116,7 @@ public actor FileLibrary {
             let result = try await withTaskCancellationHandler { try await job.value } onCancel: { control.cancel(); job.cancel() }
             let exclusions = (state.indexSettings ?? IndexSettings()).excludedFolders
             if result.complete { state.files = result.records.filter { file in !exclusions.contains { FileRules.contains($0.canonical, file.url.canonical) } } }
+            searchCatalog.replace(state.files)
             state.lastIndexReport = result.progress.persistedSummary; proposals = []; try save()
             return ScanReport(state: state, skipped: result.progress.skipped, embeddingsAvailable: result.progress.modelAvailable, progress: result.progress)
         } catch {
@@ -119,6 +131,7 @@ public actor FileLibrary {
         let exclusions = (state.indexSettings ?? IndexSettings()).excludedFolders
         for file in records where !exclusions.contains(where: { FileRules.contains($0.canonical, file.url.canonical) }) { merged[file.url.standardizedFileURL.path] = file }
         state.files = merged.values.sorted { $0.url.path < $1.url.path }
+        searchCatalog.upsert(records.filter { file in !exclusions.contains { FileRules.contains($0.canonical, file.url.canonical) } })
         state.lastIndexReport = progress.persistedSummary
         try save()
     }
@@ -126,36 +139,84 @@ public actor FileLibrary {
         await searchMatches(query).map(\.file)
     }
     public func searchMatches(_ input: String) async -> [FileSearchMatch] {
-        let query = FileSearchQuery(input)
-        guard !query.terms.isEmpty else { return [] }
-        let q = query.text
+        let plan = NavigationQuery(input)
+        guard !plan.isEmpty else { return [] }
+        if plan.topic.terms.isEmpty { return searchCatalog.matches(input) }
+        let q = plan.topic.text
         let vector: [Double]?
         if let cached = queryCache[q] { vector = cached }
         else {
             vector = await queryBackend.vector(for: q).map(VectorMath.normalized)
             if let vector { if queryCache.count >= 32 { queryCache.removeAll(keepingCapacity: true) }; queryCache[q] = vector }
         }
-        let candidates = state.files.filter { FileSearchQuery.allows($0.url) && !FileRules.contains(directory, $0.url.canonical) }.map { file -> (FileRecord, Double) in
-            let similarity = !file.sensitive ? vector.flatMap { v in file.vector.map { file.indexMetadata == nil ? VectorMath.cosine(v, $0) : file.indexMetadata?.engine == self.queryBackend.identifier ? VectorMath.dot(v, $0) : 0 } } ?? 0 : 0
-            return (file, similarity)
-        }.sorted {
-            let left = query.coverage(in: $0.0.name), right = query.coverage(in: $1.0.name)
-            return left == right ? $0.1 > $1.1 : left > right
-        }
-        // Bound content reads and keep PDF/text extraction off the library actor and main thread.
-        let job = Task.detached(priority: .userInitiated) {
-            var matches: [FileSearchMatch] = []
-            for (file, similarity) in candidates.prefix(240) {
-                if Task.isCancelled { break }
-                var content = ""
-                if !file.sensitive, let extracted = try? IndexText.extract(file.url, size: file.size), !FileRules.sensitive(extracted.text) { content = extracted.text }
-                guard let score = query.score(name: file.name, content: content, similarity: similarity) else { continue }
-                let reason = query.coverage(in: file.name) == 1 ? "Filename matches" : "Document text matches"
-                matches.append(FileSearchMatch(file: file, score: score, reason: reason))
+        return searchCatalog.matches(input, vector: vector, engine: queryBackend.identifier)
+    }
+    public func saveSmartCollection(_ query: String) throws -> [SmartCollection] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !NavigationQuery(query).isEmpty else { return state.smartCollections ?? [] }
+        var groups = state.smartCollections ?? []
+        if !groups.contains(where: { $0.query.localizedCaseInsensitiveCompare(query) == .orderedSame }) { groups.append(SmartCollection(query: query)) }
+        state.smartCollections = groups; try save(); return groups
+    }
+    public func removeSmartCollection(_ id: UUID) throws -> [SmartCollection] {
+        state.smartCollections?.removeAll { $0.id == id }; try save(); return state.smartCollections ?? []
+    }
+    func reconcileChanges(_ changed: [URL]) async throws -> LibraryState {
+        let settings = state.indexSettings ?? IndexSettings()
+        guard !scanRunning, !settings.paused else { throw OpenFilesError.message("Index is busy or paused; changes remain queued.") }
+        scanRunning = true
+        let control = IndexControl(); self.control = control
+        defer { scanRunning = false; self.control = nil }
+        let scopes = (state.roots + discoveryRoots).map(stableChangeURL), appData = stableChangeURL(directory)
+        let prior = Dictionary(state.files.map { (stableChangeURL($0.url).path, $0) }, uniquingKeysWith: { first, _ in first })
+        let worker = IndexWorker(backend: embeddingFactory(), objects: objects)
+        let job = Task.detached(priority: .utility) {
+            var paths = Set<String>(), candidates: [URL] = []
+            func add(_ url: URL) {
+                guard FileSearchQuery.allows(url), !syncContains(appData, url), !settings.excludedFolders.contains(where: { syncContains(stableChangeURL($0), url) }) else { return }
+                guard scopes.contains(where: { syncContains($0, url) }), paths.insert(url.path).inserted else { return }
+                var ancestor = url.deletingLastPathComponent()
+                while scopes.contains(where: { syncContains($0, ancestor) }) {
+                    if FileManager.default.fileExists(atPath: ancestor.appendingPathComponent("pyvenv.cfg").path) { return }
+                    if ancestor.path == "/" { break }; ancestor.deleteLastPathComponent()
+                }
+                if FileManager.default.fileExists(atPath: url.appendingPathComponent("pyvenv.cfg").path) { return }
+                candidates.append(url)
+                if let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey, .isSymbolicLinkKey]), values.isDirectory == true, values.isPackage != true, values.isSymbolicLink != true,
+                   let children = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
+                    for child in children { add(child) }
+                }
             }
-            return matches.sorted { $0.score == $1.score ? $0.file.url.path < $1.file.url.path : $0.score > $1.score }
+            for url in changed { add(stableChangeURL(url)) }
+            var updates: [FileRecord] = [], removals = Set<String>()
+            for url in candidates {
+                try await control.checkpoint()
+                var directory: ObjCBool = false
+                if !FileManager.default.fileExists(atPath: url.path, isDirectory: &directory) {
+                    for path in prior.keys where syncContains(url, URL(fileURLWithPath: path)) { removals.insert(path); if let old = prior[path] { removals.insert(old.url.path) } }
+                    continue
+                }
+                let values = try url.resourceValues(forKeys: [.isSymbolicLinkKey, .isPackageKey])
+                if values.isSymbolicLink == true { for path in prior.keys where syncContains(url, URL(fileURLWithPath: path)) { removals.insert(path); if let old = prior[path] { removals.insert(old.url.path) } }; continue }
+                if directory.boolValue && values.isPackage != true { continue }
+                guard let root = scopes.first(where: { syncContains($0, url) }) else { continue }
+                let stamp = try FileStamp.read(url)
+                let result = await worker.process(Candidate(url: url, root: root, stamp: stamp, project: directory.boolValue, prior: prior[url.path]), control: control)
+                if let record = result.record { updates.append(record) }
+                else { throw OpenFilesError.message("A changed file is still being written; sync will retry.") }
+            }
+            return (updates, removals)
         }
-        return await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
+        let (updates, removals) = try await withTaskCancellationHandler { try await job.value } onCancel: { control.cancel(); job.cancel() }
+        let exclusions = (state.indexSettings ?? IndexSettings()).excludedFolders
+        var merged = Dictionary(state.files.filter { !removals.contains($0.url.path) }.map { ($0.url.path, $0) }, uniquingKeysWith: { first, _ in first })
+        for file in updates where !exclusions.contains(where: { syncContains($0.canonical, file.url) }) {
+            if settings.maxFiles == 0 || merged[file.url.path] != nil || merged.count < settings.maxFiles { merged[file.url.path] = file }
+        }
+        state.files = merged.values.sorted { $0.url.path < $1.url.path }
+        searchCatalog.upsert(updates.filter { merged[$0.url.path] != nil }, removing: removals)
+        try save()
+        return state
     }
     /// Compare saved bytes, including package contents, rather than modification dates.
     public func versionStatus(_ input: URL) throws -> String {
@@ -167,23 +228,10 @@ public actor FileLibrary {
         state.versions.filter { $0.source == input.canonical }.sorted { $0.created > $1.created }
     }
     public func commit(_ input: URL, message: String) throws -> LibraryState {
-        let source = input.canonical
-        guard !FileRules.contains(directory, source), !FileRules.contains(source, directory) else { throw OpenFilesError.message("OpenFiles app data cannot be versioned.") }
-        try checkSnapshotEligibility(source)
-        let version = FileVersion(id: UUID(), source: source, message: message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Saved version" : String(message.prefix(500)), created: Date(), digest: try FileIntegrity.digest(source))
-        let folder = directory.appendingPathComponent("Versions/\(version.id.uuidString)")
-        let payload = folder.appendingPathComponent(source.lastPathComponent)
-        try fm.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        do {
-            // Full copies preserve opaque binary formats and project packages. Save in the editor first.
-            try fm.copyItem(at: source, to: payload)
-            guard try FileIntegrity.digest(source) == version.digest, try FileIntegrity.digest(payload) == version.digest else { throw OpenFilesError.message("The file changed during the snapshot. Save in your editor, then retry.") }
-            state.versions.insert(version, at: 0)
-            do { try save() } catch { state.versions.removeFirst(); throw error }
-        } catch { try? fm.removeItem(at: folder); throw error }
+        try captureVersion(source: input.canonical, contents: input.canonical, message: message)
         return state
     }
-    private func checkSnapshotEligibility(_ url: URL) throws {
+    func checkSnapshotEligibility(_ url: URL) throws {
         let v = try url.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey, .fileSizeKey])
         guard v.isSymbolicLink != true else { throw OpenFilesError.message("Projects containing symbolic links are not supported yet.") }
         guard !FileRules.sensitive(url.lastPathComponent) else { throw OpenFilesError.message("Potentially sensitive files are excluded from version history. Use the encrypted vault.") }

@@ -31,6 +31,15 @@ func checkEqual(_ lhs: Double, _ rhs: Double, accuracy: Double, file: StaticStri
 @main
 struct Runner {
     static func main() async {
+        if CommandLine.arguments.contains("--versions") {
+            for (name, check) in VersionChecks.scenarios {
+                let previous = log.failures
+                do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(VersionChecks.scenarios.count) version scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
         let checks: [(String, (LibraryChecks) async throws -> Void)] = [
             ("Natural-language search relevance and dependency exclusion", { try await $0.testGroundedNaturalLanguageSearch() }),
             ("Local search, sensitive exclusion, persistence", { try await $0.testSearchExcludesSensitiveEmbeddingsAndPersistence() }),
@@ -53,13 +62,18 @@ struct Runner {
             catch { failCheck("\(name): \(error.localizedDescription)"); try? suite.tearDownWithError() }
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
         }
-        for (name, check) in IndexChecks.scenarios {
+        for (name, check) in IndexChecks.scenarios + NavigationChecks.scenarios + ImageContentChecks.scenarios + OrganizationChecks.scenarios {
+            let previous = log.failures
+            do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+            print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+        }
+        for (name, check) in VersionChecks.scenarios {
             let previous = log.failures
             do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
         }
         do { try await VaultChecks().testEncryptedVaultRoundTrip() } catch { failCheck("Encrypted vault: \(error.localizedDescription)") }
-        print("\(checks.count + IndexChecks.scenarios.count) core scenarios; \(log.failures) failures")
+        print("\(checks.count + IndexChecks.scenarios.count + VersionChecks.scenarios.count + NavigationChecks.scenarios.count + ImageContentChecks.scenarios.count + OrganizationChecks.scenarios.count) core scenarios; \(log.failures) failures")
         exit(log.failures == 0 ? 0 : 1)
     }
 }

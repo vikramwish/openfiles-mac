@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 
 public struct IndexSettings: Codable, Hashable, Sendable {
-    public var maxFiles: Int = 2000 // 0 means unlimited. Does not limit browsing or Spotlight.
+    public var maxFiles: Int = 0 // 0 means unlimited. Does not limit browsing or Spotlight.
     public var workers: Int = 2
     public var excludedFolders: [URL] = []
     public var paused: Bool = false
@@ -36,6 +36,7 @@ public struct FileIndexMetadata: Codable, Hashable, Sendable {
     public var outcome: String
     public var detail: String
     public var retryable: Bool
+    public var imageRevision: String? = nil
 }
 
 public struct IndexEvent: Codable, Identifiable, Sendable {

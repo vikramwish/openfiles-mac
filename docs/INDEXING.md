@@ -29,7 +29,7 @@ Hidden items, symbolic links, app data/vault contents, Python environments (incl
 
 ## Stored data
 
-`~/Library/Application Support/OpenFiles/library.json` stores paths, stat signatures, classification, object keys, index settings, and summary counters. New vectors are stored once per object under `IndexObjects/<sha256>.json`; legacy inline vectors are read for migration. Extracted text and diagnostic word lists are not persisted. Objects contain the model identifier, normalized vector, word-unit count, input length, and timing metadata. Both the manifest and objects are local and **unencrypted**. Pause/exclusion does not securely erase previously computed objects; there is no object garbage collector yet. Existing history and encrypted vault storage are separate.
+`~/Library/Application Support/OpenFiles/library.json` stores paths, stat signatures, classification, object keys, index settings, and summary counters. New vectors are stored once per object under `IndexObjects/<sha256>.json`; legacy inline vectors are read for migration. Full extracted text is not persisted. File records now retain normalized unique search terms from the first 6,000 extracted word units (at most 12,000 source characters) for inverted-index lookup. Sensitive-classified files retain no content terms. Terms can reveal document contents and are unencrypted, like filenames and embeddings. Saved smart-group query definitions are stored alongside index state. Objects contain the model identifier, normalized vector, word-unit count, input length, and timing metadata. Both the manifest and objects are local and **unencrypted**. Pause/exclusion does not securely erase previously computed objects; there is no object garbage collector yet. Existing history and encrypted vault storage are separate.
 
 ## Benchmark
 
@@ -39,14 +39,14 @@ Run the disposable benchmark in release mode:
 swift run --build-system native -c release OpenFilesBenchmark --count 48
 ```
 
-A single comparison on the initial developer's **Apple M3 Max (arm64, 16 active CPUs)** used 48 bounded text documents containing 24 unique contents, with no user files. Both versions used the same Apple native sentence-embedding backend and the same corpus generator. The baseline was repository commit `144b5d8`, built separately; build time is excluded.
+Three alternating baseline/optimized runs on the initial developer's **Apple M3 Max (arm64, 16 active CPUs)** used 48 bounded text documents containing 24 unique contents, with no user files. The table reports medians. Both versions used the same Apple native sentence-embedding backend and the same corpus generator. The baseline was repository commit `144b5d8`, built separately; build time is excluded.
 
 | Pass | Baseline | Incremental implementation | Observed ratio |
 | --- | ---: | ---: | ---: |
-| Cold corpus | 2.034 s | 0.975 s | 2.1× faster |
-| Warm refresh, same process | 0.062 s | 0.007 s | 8.9× faster |
+| Cold corpus | 2.128 s | 1.069 s | 2.0× faster |
+| Warm refresh, same process | 0.064 s | 0.008 s | 8.0× faster |
 
-This is one small synthetic run, not a universal speed claim. Duplicate content favors object reuse. Whole-home performance depends on file formats, storage, model initialization, cache state, temperature, and permissions. The benchmark also reports inference/read/tokenization counters and a restart-inclusive warm scan. Tests use an injectable backend to verify that warm scans perform zero content reads and zero inference, and that restart, cancellation, replacement, model-version changes, and missing objects behave correctly.
+This is a small synthetic comparison, not a universal speed claim. The optimized cold range was 1.064–1.083 s; warm range 0.008–0.010 s. All three warm passes reported zero content reads, zero new word-count/tokenization passes, zero inference calls, and 48 stat-cache hits. Duplicate content favors object reuse. Whole-home performance depends on file formats, storage, model initialization, cache state, temperature, and permissions. The benchmark also reports inference/read/tokenization counters and a restart-inclusive warm scan. Tests use an injectable backend to verify that warm scans perform zero content reads and zero inference, and that restart, cancellation, replacement, model-version changes, and missing objects behave correctly.
 
 ## References and extension boundary
 
@@ -56,3 +56,23 @@ This is one small synthetic run, not a universal speed claim. Duplicate content 
 - [Apple Accelerate](https://developer.apple.com/documentation/accelerate): CPU vector arithmetic.
 
 `EmbeddingBackend` is the small injectable boundary for a future MLX/Core ML backend. No MLX package, model weights, external runtime, or model download is added by this change. A future backend must supply a stable model/tokenizer identity and reindex compatible objects; it should not label diagnostic word counts as model tokens.
+
+
+## Instant navigation and live reconciliation
+
+`SearchCatalog` builds inverted postings and token-set/metadata caches from persisted file records at startup. Checkpoint and delta updates refresh those relationships; readers use a COW snapshot. Prefix lookup uses a sorted vocabulary, metadata predicates narrow candidates, and bounded top-K selection avoids sorting the complete result set. Fast results require no source-file reads, file metadata calls, or inference. Query embeddings are optional, memoized refinement after the first response. A missing model does not disable cached text or metadata lookup.
+
+`NavigationQuery` deterministically parses common file kinds, known or quoted folder names, recent-first ordering, and today/yesterday/this-week/last-week/this-month/last-month/this-year modification filters. Group-by-folder/project uses folder relationships; kind and month are metadata groups. This is a supported query grammar, not general conversation or inferred project membership. The panel displays group counts for its bounded result set. A saved group stores the query, not a stale list of files.
+
+File-level FSEvents notifications feed an 800 ms debounce and a retry queue. Individual changes are reconciled without walking unrelated roots; new/renamed directories enumerate their own subtree. The stat/content cache still avoids unchanged extraction and inference. Events are collected during indexing and pause. Full reconciliation happens on launch, wake, overflow/root changes, and every five minutes. No event journal cursor is persisted; startup reconciliation recovers changes missed while the app was closed. Watcher failure is reported and periodic reconciliation remains available. Index limits and unavailable locations mean this is not a claim to have mapped every file on the machine.
+
+Source files are read-only to search/sync/grouping. Filesystem events update the index rather than authorizing moves or deletions. Unattended physical organization is disabled; original-file writes are separate explicit user operations. Content-based sensitivity checks remain heuristic and do not make the derived index encrypted.
+
+
+## Image pixels and OCR
+
+Raster images are processed by `NativeImageContent` with native Vision classification and accurate OCR on an ImageIO thumbnail (orientation applied, maximum side 2,048 pixels). Encoded files over 50 MB and unavailable cloud placeholders remain filename-only. GIF analysis uses the first frame. Up to 12 classifications at confidence >= 0.25 are retained. OCR candidates below 0.5 confidence are discarded, and extracted OCR text is transiently bounded to 12,000 characters. Only normalized OCR terms, predicted labels/confidences, and the Vision/preparation revision are persisted in `imageContent`.
+
+The indexing worker applies the existing filename/content sensitivity checks before retaining visual metadata. A positive OCR-content sensitivity match discards both image metadata and searchable content terms. This is a heuristic, not a guarantee of private-image detection. Vision does not identify people or run a face-recognition feature here.
+
+Image analysis revision is checked independently of the text embedding engine so previously filename-only images migrate on the next indexing pass. Stat-stable results, including completed filename-only size skips, are reused without pixel decoding; transient decoder/model/cloud failures remain retryable. Both full scans and incremental changes share the same worker. Fast search uses persisted labels/OCR postings rather than executing Vision. Neither requests nor extracted images are sent to a cloud service.
