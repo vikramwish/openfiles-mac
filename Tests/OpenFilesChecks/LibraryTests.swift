@@ -169,6 +169,37 @@ final class LibraryChecks {
         let plan = try await library.previewOrganization(); checkTrue(plan.isEmpty)
         do { _ = try await library.authorized(file); failCheck("Discovery must not authorize moves") } catch {}
     }
+    func testFileHistoryAndSavedChangeStatus() async throws {
+        _ = try await library.load()
+        let first = try write("Deck.pptx", "binary presentation v1")
+        let otherFolder = root.appendingPathComponent("Other")
+        try FileManager.default.createDirectory(at: otherFolder, withIntermediateDirectories: true)
+        let other = otherFolder.appendingPathComponent("Deck.pptx")
+        try Data([1, 2, 3]).write(to: other)
+        let empty = try await library.versionStatus(first)
+        checkEqual(empty, "No committed versions")
+        _ = try await library.commit(first, message: "First draft")
+        _ = try await library.commit(other, message: "Unrelated deck")
+        let clean = try await library.versionStatus(first)
+        checkEqual(clean, "All saved changes committed")
+        try "presentation v2".write(to: first, atomically: true, encoding: .utf8)
+        let changed = try await library.versionStatus(first)
+        checkEqual(changed, "Saved changes to commit")
+        _ = try await library.commit(first, message: "Updated slides")
+        let versions = await library.versions(for: first)
+        checkEqual(versions.count, 2)
+        checkEqual(versions.first?.message, "Updated slides")
+        let restored = try await library.exportVersion(versions[1], into: root)
+        checkEqual(restored.pathExtension, "pptx")
+        checkEqual(try String(contentsOf: restored), "binary presentation v1")
+        checkEqual(try String(contentsOf: first), "presentation v2")
+        let reopened = FileLibrary(directory: data)
+        _ = try await reopened.load()
+        let history = await reopened.versions(for: first)
+        checkEqual(history, versions)
+        try FileManager.default.removeItem(at: first)
+        do { _ = try await library.versionStatus(first); failCheck("Missing working file must report an error") } catch {}
+    }
     func testPureRules() {
         checkEqual(FileRules.category(URL(fileURLWithPath: "/a/image.HEIC")), "Images")
         checkEqual(FileRules.cosine([1, 0], [1, 0]), 1, accuracy: 0.001)

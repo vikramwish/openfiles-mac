@@ -3,12 +3,21 @@ import AppKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    weak var model: AppModel?
+    let model = AppModel()
+    private var searchPanel: SearchPanelController?
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+        searchPanel = SearchPanelController(model: model)
+        // Wait until SwiftUI finishes launching its menu-bar scene before taking key focus.
+        Task { await model.start(); searchPanel?.show() }
+    }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        searchPanel?.show(); return false
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let model else { return .terminateNow }
         Task {
-            do { _ = try await model.vault.lock(); sender.reply(toApplicationShouldTerminate: true) }
+            do { await model.finishIndexingBeforeQuit(); _ = try await model.vault.lock(); self.searchPanel?.shutdown(); sender.reply(toApplicationShouldTerminate: true) }
             catch {
                 let alert = NSAlert(); alert.messageText = "The vault is still in use"; alert.informativeText = "Close files open from the vault and try quitting again. \(error.localizedDescription)"; alert.runModal()
                 sender.reply(toApplicationShouldTerminate: false)
@@ -22,17 +31,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 struct OpenFilesApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
-    @StateObject private var model = AppModel()
+    private var model: AppModel { delegate.model }
     var body: some Scene {
-        Window("OpenFiles", id: "main") {
-            ContentView().environmentObject(model)
-                .frame(minWidth: 980, minHeight: 680)
-                .task { delegate.model = model; await model.start() }
+        MenuBarExtra("OpenFiles", systemImage: "folder.badge.gearshape") {
+            MenuContents().environmentObject(model)
         }
-        .defaultSize(width: 1260, height: 820)
-        .windowStyle(.hiddenTitleBar)
         .commands {
+            CommandMenu("Version History") {
+                Button("Show selected file’s history") {
+                    if let item = model.selectedItem { model.showVersionPanel(for: item.url) }
+                }.keyboardShortcut("h", modifiers: [.command, .option]).disabled(model.selectedItem == nil || model.selectedItem?.sensitive == true)
+                if let url = model.editingURL {
+                    Button("Versions for \(url.lastPathComponent)") { model.showVersionPanel(for: url) }
+                    Button("Commit saved changes for \(url.lastPathComponent)") { model.commitFile(url, message: "") }.disabled(model.busy)
+                }
+                Divider()
+                Button("All version history") { model.section = .history; model.showWorkspace?() }
+                Button("Commit file…") { model.chooseCommit() }.disabled(model.busy)
+                Button("Commit project folder…") { model.chooseCommit(project: true) }.disabled(model.busy)
+            }
             CommandGroup(after: .newItem) {
+                Button("Search files…") { model.showSearch?() }.keyboardShortcut(.space, modifiers: [.command, .shift])
+                Button("Browse files…") { model.showWorkspace?() }
+
                 Button("Open location…") { model.chooseFolder() }.keyboardShortcut("o", modifiers: [.command, .shift])
                 Button("Go to folder…") { model.requestGo() }.keyboardShortcut("g", modifiers: [.command, .shift])
                 Button("New folder…") { model.showingNewFolder = true }.keyboardShortcut("n", modifiers: [.command, .shift])
@@ -44,23 +65,30 @@ struct OpenFilesApp: App {
                 Button("Commit project folder…") { model.chooseCommit(project: true) }
             }
         }
-        MenuBarExtra("OpenFiles", systemImage: "folder.badge.gearshape") {
-            MenuContents().environmentObject(model)
-        }
+
     }
 }
 
 struct MenuContents: View {
     @EnvironmentObject var model: AppModel
-    @Environment(\.openWindow) private var openWindow
     var body: some View {
-        Button("Open OpenFiles") { show() }
+        Button("Search files…   ⌘⇧Space") { model.showSearch?() }
+        Button("Browse files…") { model.section = .files; show() }
         Divider()
+        if let url = model.editingURL {
+            Text(url.lastPathComponent)
+            Button("Versions for \(url.lastPathComponent)") { model.showVersionPanel(for: url) }
+            Button("Commit saved changes") { model.commitFile(url, message: "") }.disabled(model.busy)
+            Divider()
+        }
         Button("Commit file…") { show(); model.chooseCommit() }.disabled(model.busy)
         Button("Commit project folder…") { show(); model.chooseCommit(project: true) }.disabled(model.busy)
+        Divider()
+        Button("Indexing activity…") { show(); model.showingIndexing = true }
+        Button(model.indexSettings.paused ? "Resume indexing" : "Pause indexing") { model.setIndexPaused(!model.indexSettings.paused) }
         Divider()
         if model.vaultState.mounted { Button("Lock private vault") { model.lockVault() }.disabled(model.busy) }
         Button("Quit OpenFiles") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
-    private func show() { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
+    private func show() { model.showWorkspace?() }
 }
