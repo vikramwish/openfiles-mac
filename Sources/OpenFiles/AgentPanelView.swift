@@ -150,7 +150,11 @@ struct AgentPanelView: View {
                 if !action.reason.isEmpty {
                     Text(action.reason).font(.caption).foregroundStyle(.secondary)
                 }
+                if let unavailable = model.agentAvailability(action) {
+                    Label(unavailable, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                }
             }.padding(.vertical, 2)
-        }.toggleStyle(.checkbox).disabled(model.agentBusy)
+        }.toggleStyle(.checkbox).disabled(model.agentBusy || model.agentAvailability(action) != nil)
     }
 }

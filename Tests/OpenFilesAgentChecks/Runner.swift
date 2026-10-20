@@ -57,7 +57,9 @@ struct Runner {
             ("Agent client builds an OpenAI-compatible request and parses fenced JSON", AgentChecks.clientRequestAndFencedJSON),
             ("Agent client reports provider errors and lists models", AgentChecks.clientErrorsAndModels),
             ("Agent move preview refuses unsafe sources and destinations", AgentChecks.movePreviewRefusesUnsafeSources),
-            ("Agent move apply re-verifies files and never replaces originals", AgentChecks.moveApplyReverifies)
+            ("Agent move apply re-verifies files and never replaces originals", AgentChecks.moveApplyReverifies),
+            ("Agent navigate accepts a path alias and deduplicates", AgentChecks.navigatePathAlias),
+            ("Agent availability flags inapplicable actions", AgentChecks.availabilityFlagsInapplicableActions)
         ]
         var failures = 0
         for (name, scenario) in scenarios {

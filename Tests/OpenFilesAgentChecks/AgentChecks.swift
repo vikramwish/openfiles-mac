@@ -206,4 +206,46 @@ enum AgentChecks {
         try expect(try String(contentsOf: archive.appendingPathComponent("keep.txt"), encoding: .utf8) == "existing copy", "existing file untouched")
         try expect(try String(contentsOf: archive.appendingPathComponent("keep (2).txt"), encoding: .utf8) == "keep this", "new copy holds the moved bytes")
     }
+
+    static func navigatePathAlias() async throws {
+        let json = """
+        {"actions":[
+          {"kind":"navigate","path":"/tmp/OpenFilesAgent/Travel"},
+          {"kind":"navigate","folder":"/tmp/OpenFilesAgent/Travel"}
+        ]}
+        """
+        guard let plan = AgentPlanCodec.decode(Data(json.utf8)) else { throw CheckFailure("plan should decode") }
+        try expect(plan.actions.count == 1, "path and folder navigate forms deduplicate, got \(plan.actions.count)")
+        try expect(plan.actions.first?.kind == .navigate && plan.actions.first?.folder?.path == "/tmp/OpenFilesAgent/Travel", "path accepted as the navigate folder")
+        try expect(plan.ignored.isEmpty, "the alias form is not reported as ignored")
+    }
+
+    static func availabilityFlagsInapplicableActions() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("OpenFilesAgentAvailability-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let files = base.appendingPathComponent("Files")
+        let home = base.appendingPathComponent("Home")
+        let fm = FileManager.default
+        try fm.createDirectory(at: files, withIntermediateDirectories: true)
+        try fm.createDirectory(at: home, withIntermediateDirectories: true)
+        try "notes".write(to: files.appendingPathComponent("keep.txt"), atomically: true, encoding: .utf8)
+        try "credentials".write(to: files.appendingPathComponent("passwords.txt"), atomically: true, encoding: .utf8)
+
+        // Advisory checks mirror the authoritative guards: missing, sensitive, out of scope, lost folder.
+        let missing = AgentAction(kind: .rename, source: files.appendingPathComponent("missing.txt"), name: "New name.txt")
+        try expect(missing.availability(home: home, roots: [files]) == "File not found", "missing source is flagged")
+        let sensitive = AgentAction(kind: .rename, source: files.appendingPathComponent("passwords.txt"), name: "New name.txt")
+        try expect(sensitive.availability(home: home, roots: [files]) == "Potentially sensitive", "sensitive name is flagged")
+        let outside = AgentAction(kind: .move, source: files.appendingPathComponent("keep.txt"), destination: URL(fileURLWithPath: "/Applications"))
+        try expect(outside.availability(home: home, roots: [files]) == "Destination outside personal folders", "out-of-scope destination is flagged")
+        let lostFolder = AgentAction(kind: .navigate, folder: files.appendingPathComponent("Nowhere"))
+        try expect(lostFolder.availability(home: home, roots: [files]) == "Folder not found", "missing navigate folder is flagged")
+        let goodRename = AgentAction(kind: .rename, source: files.appendingPathComponent("keep.txt"), name: "New name.txt")
+        try expect(goodRename.availability(home: home, roots: [files]) == nil, "valid rename is available")
+        // Folders inside the user's scope do not need to exist yet; the move creates them when applied.
+        let goodMove = AgentAction(kind: .move, source: files.appendingPathComponent("keep.txt"), destination: home.appendingPathComponent("Archive"))
+        try expect(goodMove.availability(home: home, roots: [files]) == nil, "a move to a folder that will be created stays available")
+        let goodNavigate = AgentAction(kind: .navigate, folder: home)
+        try expect(goodNavigate.availability(home: home, roots: [files]) == nil, "valid navigate is available")
+    }
 }

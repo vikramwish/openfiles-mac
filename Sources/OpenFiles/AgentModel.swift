@@ -20,6 +20,12 @@ extension AppModel {
             .map { AgentFileEntry(url: $0.url, isFolder: $0.isFolder, bytes: $0.size, excerpt: nil) })
     }
 
+    /// Advisory per-action check shown in the panel before approval. The authoritative
+    /// guards still run when an approved action is applied.
+    func agentAvailability(_ action: AgentAction) -> String? {
+        action.availability(home: FileManager.default.homeDirectoryForCurrentUser, roots: state.roots)
+    }
+
     func requestAgentPlan(_ instruction: String) async {
         let instruction = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !instruction.isEmpty else { return }
@@ -56,8 +62,11 @@ extension AppModel {
                 return
             }
             agentPlan = plan
-            agentSelection = Set(plan.actions.map(\.id))
-            status = "Hermes proposed \(plan.actions.count) action\(plan.actions.count == 1 ? "" : "s"). Review and approve them."
+            // Only applicable actions start selected; unavailable rows stay visible with their reason.
+            let available = plan.actions.filter { agentAvailability($0) == nil }
+            agentSelection = Set(available.map(\.id))
+            let unavailable = plan.actions.count - available.count
+            status = "Hermes proposed \(plan.actions.count) action\(plan.actions.count == 1 ? "" : "s").\(unavailable > 0 ? " \(unavailable) cannot be applied as proposed." : "") Review and approve them."
         } catch { agentError = error.localizedDescription }
     }
 

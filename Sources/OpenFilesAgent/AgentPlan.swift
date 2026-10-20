@@ -21,6 +21,30 @@ public struct AgentAction: Identifiable, Sendable, Equatable {
         self.id = id; self.kind = kind; self.source = source; self.name = name
         self.destination = destination; self.folder = folder; self.reason = reason
     }
+
+    /// nil when the action looks applicable, otherwise a short reason for the panel. Advisory only:
+    /// every guard still runs authoritatively when the approved action is applied.
+    public func availability(home: URL, roots: [URL]) -> String? {
+        let fm = FileManager.default
+        switch kind {
+        case .rename, .move:
+            guard let source else { return "No file referenced" }
+            var isDirectory: ObjCBool = false
+            guard fm.fileExists(atPath: source.path, isDirectory: &isDirectory), !isDirectory.boolValue else { return "File not found" }
+            guard !FileRules.sensitive(source.lastPathComponent) else { return "Potentially sensitive" }
+            if kind == .move {
+                guard let destination else { return "No destination folder" }
+                // Folders inside the user's scope can be created during the move; anything else is refused later.
+                let scope = [home.resolvingSymlinksInPath().standardizedFileURL] + roots.map { $0.resolvingSymlinksInPath().standardizedFileURL }
+                guard scope.contains(where: { FileRules.contains($0, destination) }) else { return "Destination outside personal folders" }
+            }
+        case .navigate:
+            guard let folder else { return "No folder referenced" }
+            var isDirectory: ObjCBool = false
+            guard fm.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else { return "Folder not found" }
+        }
+        return nil
+    }
 }
 
 public struct AgentPlan: Sendable, Equatable {
@@ -95,7 +119,9 @@ public enum AgentPlanCodec {
                 guard seen.insert("move|\(source.path)|\(destination.path)").inserted else { continue }
                 plan.actions.append(AgentAction(kind: .move, source: source, destination: destination, reason: reason))
             case "navigate":
-                guard let target = folder else { ignore("Navigate without a folder"); continue }
+                // Some models put the folder in "path" (observed with local Qwen); accept it rather
+                // than refusing an otherwise clear action, and dedupe against the "folder" form.
+                guard let target = folder ?? path else { ignore("Navigate without a folder"); continue }
                 guard seen.insert("navigate|\(target.path)").inserted else { continue }
                 plan.actions.append(AgentAction(kind: .navigate, folder: target, reason: reason))
             default:
