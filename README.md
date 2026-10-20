@@ -23,19 +23,30 @@ OPENFILES_TEST_VAULT=1 swift run --build-system native OpenFilesChecks
 
 Checks use a small dependency-free executable because Command Line Tools do not ship XCTest. They return a nonzero exit code on failure. The scripts select SwiftPM's `native` build engine because the Swift 6.4 Command Line Tools on the initial development machine cannot initialize the default Swift Build engine. This option also works with Swift 5.9. No full Xcode installation is needed to run locally.
 
-## Try it
+## Browse and search
 
-1. Choose **Explore sample files** for disposable examples, or **Add folder** for a real folder you want indexed. No folders are scanned by default. Right-click a folder in the sidebar to remove it from the index.
-2. Search by name or describe a topic, such as “travel plans for Japan.” English sentence embeddings run on-device when Apple's model is available. Filename search continues to work when it is unavailable.
-3. Open **Organize → Preview organization** to review moves, then apply them. Files must be at a connected folder's top level and unchanged for 10 seconds. Files are sorted under that folder's `Organized/` directory. Automatic organization is an explicit switch and runs every minute while the app is open.
-4. **Save your work in its editor**, then choose **Commit file…** or **Commit project folder…** from the OpenFiles window or its menu bar icon. Add a message. **Restore copy…** exports a verified copy to a chosen folder and refuses to overwrite an existing copy.
-5. Create a password-protected **Private vault**, copy a file in, and lock it. Vault import preserves the original. Verify the encrypted copy and remove the original yourself if needed. The app attempts to lock the vault on quit; an open file can prevent unmounting.
+OpenFiles opens directly into your home folder. **No folder connection or import is needed.** Use Home, Desktop, Documents, Downloads, Pictures, Music, Movies, Applications, This Mac, iCloud Drive (when present), and mounted volumes in the sidebar.
+
+- Double-click a folder to browse it inside OpenFiles, or a file to open its default editor. Back/forward, parent-folder navigation, clickable breadcrumbs, and **Go to folder** (⌘⇧G) work without Finder.
+- **Search this Mac** searches Spotlight's indexed local volumes by filename and content. You can switch to the current folder. Results arrive while background semantic indexing is running. Search shows up to 1,000 Spotlight matches and the top 100 semantic matches; narrow your query to see other matches.
+- English semantic indexing starts automatically for your home folder, prioritizing Downloads, Documents, Desktop, Pictures, Music, and Movies. The prototype embeds up to 2,000 files; **this cap does not limit folder browsing or the scope of Spotlight search**. Apple’s model must be available for semantic results.
+- Select an item and press Return to open it or Space for a Quick Look preview. Right-click for preview, enclosing-folder navigation, copy path, or commit. ⌘⇧N creates a folder; ⌘⇧. toggles hidden files.
+- macOS still enforces folder permissions. Protected folders may require approval in macOS or Full Disk Access. Spotlight excludes locations the OS or user has excluded from indexing. You can still browse accessible unindexed folders directly.
+
+## Organization, history, and vault
+
+Browsing/search access is separate from permission to rearrange files. In **Organize**, explicitly choose folders that may be organized, review the preview, then apply it. Only top-level files unchanged for 10 seconds are eligible. Automation remains off by default; enabling it applies only to those chosen organization targets, never every folder discovered by search.
+
+Save your work in its editor, then choose **Commit file…** or **Commit project folder…** from the window or menu bar. Add a message. **Restore copy…** exports a verified copy without overwriting your working file and displays its destination inside OpenFiles.
+
+Create a password-protected **Private vault**, copy a file in, and lock it. Browse its contents inside OpenFiles while unlocked. Import preserves the original; verify the copy and remove the original yourself if needed. Quitting attempts to lock the vault; open files can prevent unmounting.
 
 ## What this base implements
 
 | Area | Working now | Extension work |
 | --- | --- | --- |
-| Search | Local English embeddings, cosine ranking, filename matching, persistent index; bounded text and PDF extraction | Chunked index, OCR, Office parsers, multilingual models, SQLite/vector index |
+| Browsing | Direct filesystem browser, default locations/volumes, history, breadcrumbs, hidden files, path navigation, Quick Look, new folders | Rename, move/copy, Trash, multi-selection, drag/drop, sorting and view modes |
+| Search | System-wide Spotlight search plus automatic local English embeddings; bounded text/PDF extraction | Chunked index, OCR, Office parsers, multilingual models, SQLite/vector index |
 | Organization | Extension rules, exact move preview, collision refusal, content verification, optional one-minute automation | Rule editor, undo journal, filesystem events, model-based classification |
 | Sensitive files | Filename/content heuristics exclude likely matches from embeddings, snapshots, and organization; encrypted APFS vault | Reviewed sensitive-file migration, richer detection, encrypted metadata |
 | Versions | Full file/folder/package snapshots, SHA-256 verification, commit messages, non-destructive restore | Content-addressed deduplication, retention, coordinated editor saves, linked asset tracking |
@@ -47,14 +58,14 @@ Checks use a small dependency-free executable because Command Line Tools do not 
 
 All application state lives in `~/Library/Application Support/OpenFiles/`:
 
-- `library.json`: connected paths, file metadata, embedding vectors, and version metadata. No extracted document text is retained. This index is **not encrypted**; filenames, paths, and embeddings can reveal information.
+- `library.json`: organization targets, file metadata, embedding vectors, and version metadata. No extracted document text is retained. This index is **not encrypted**; filenames, paths, and embeddings can reveal information.
 - `Versions/<id>/`: full copies of committed files/projects. Sensitive-content checks are heuristics, not a confidentiality guarantee. Snapshots are local history, not an off-device backup.
 - `Private.sparsebundle`: AES-256 encrypted APFS disk image, 10 GB logical capacity, allocated as needed.
 - `vault-mount/`: mount point while unlocked. Vault content is accessible to the logged-in user and their processes while mounted. Passwords are not stored, logged, or passed as process arguments; there is no password recovery.
 
-No telemetry, cloud API, or automatic model download is implemented. Files outside connected roots are not indexed. Hidden files, symbolic links, common generated directories, app data, and vault content are excluded. Scans are capped at 2,000 indexed files; text extraction at 5 MB files / 12,000 characters; PDFs at 20 pages; embeddings at 4,000 characters. Native packages are treated as single projects. Sensitive detection cannot find every secret, especially in opaque binary formats.
+No telemetry, cloud API, or automatic model download is implemented. Browsing can visit any accessible location. Spotlight search results are not persisted. Automatic semantic indexing excludes hidden files, symbolic links, common generated directories, app data, and vault content. Semantic scans are capped at 2,000 indexed files; text extraction at 5 MB files / 12,000 characters; PDFs at 20 pages; embeddings at 4,000 characters. Native packages are treated as single projects. Sensitive detection cannot find every secret, especially in opaque binary formats.
 
-This is an unsandboxed, locally signed developer app. macOS may ask for access to Documents, Desktop, or Downloads after you choose them. Distribution needs a stable signing identity, hardened runtime/notarization, and a decision about sandboxing and security-scoped bookmarks.
+This is an unsandboxed, locally signed developer app. macOS may ask for access to protected folders during browsing or automatic indexing. Distribution needs a stable signing identity, hardened runtime/notarization, and a decision about sandboxing and security-scoped bookmarks.
 
 ## Work together
 

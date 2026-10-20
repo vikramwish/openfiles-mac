@@ -123,6 +123,52 @@ final class LibraryChecks {
         checkTrue(FileManager.default.fileExists(atPath: file.path))
         checkTrue(try FileManager.default.contentsOfDirectory(atPath: outside.path).isEmpty)
     }
+    func testBrowserWorksWithoutConnectedRootsAndHasNoIndexCap() async throws {
+        _ = try await library.load()
+        let browser = FileBrowser()
+        let nested = root.appendingPathComponent("Nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let hidden = try write(".hidden.txt", "hidden")
+        _ = try write("visible.txt", "visible")
+        let package = root.appendingPathComponent("Session.band", isDirectory: true)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+        for index in 0..<2010 { try Data().write(to: root.appendingPathComponent("entry-\(index).bin")) }
+        let items = try await browser.contents(of: root)
+        checkEqual(items.count, 2013)
+        checkTrue(items.first?.isFolder == true)
+        checkFalse(items.contains { $0.url.lastPathComponent == hidden.lastPathComponent })
+        let withHidden = try await browser.contents(of: root, showHidden: true)
+        checkEqual(withHidden.count, 2014)
+        checkTrue(items.first { $0.name == "Session.band" }?.isPackage == true)
+        checkFalse(items.first { $0.name == "Session.band" }?.isFolder == true)
+        let state = await library.current(); checkTrue(state.roots.isEmpty)
+    }
+    func testBrowserFolderCreationAndSymlinkNavigation() async throws {
+        let browser = FileBrowser()
+        let created = try await browser.createFolder(in: root, name: "New project")
+        _ = try await browser.createFolder(in: created, name: "Assets")
+        do { _ = try await browser.createFolder(in: root, name: "New project"); failCheck("Must refuse a collision") } catch {}
+        do { _ = try await browser.createFolder(in: root, name: "../escape"); failCheck("Must refuse traversal") } catch {}
+        let alias = root.appendingPathComponent("Alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: created)
+        let entry = try await browser.item(at: alias); checkTrue(entry.isFolder)
+        let contents = try await browser.contents(of: alias); checkEqual(contents.first?.name, "Assets")
+    }
+    func testDefaultSearchDiscoveryDoesNotAuthorizeOrganization() async throws {
+        _ = try await library.load()
+        let documents = root.appendingPathComponent("Documents", isDirectory: true)
+        try FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
+        let file = documents.appendingPathComponent("Brief.txt")
+        try "Design project launch brief".write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-30)], ofItemAtPath: file.path)
+        await library.enableDefaultDiscovery(home: root)
+        let report = try await library.scan()
+        checkTrue(report.state.roots.isEmpty)
+        checkEqual(report.state.files.count, 1)
+        let search = await library.search("Brief"); checkEqual(search.first?.name, "Brief.txt")
+        let plan = try await library.previewOrganization(); checkTrue(plan.isEmpty)
+        do { _ = try await library.authorized(file); failCheck("Discovery must not authorize moves") } catch {}
+    }
     func testPureRules() {
         checkEqual(FileRules.category(URL(fileURLWithPath: "/a/image.HEIC")), "Images")
         checkEqual(FileRules.cosine([1, 0], [1, 0]), 1, accuracy: 0.001)

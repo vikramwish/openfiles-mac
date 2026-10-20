@@ -7,6 +7,7 @@ public actor FileLibrary {
     public let directory: URL
     private var state = LibraryState()
     private var proposals: [MoveProposal] = []
+    private var discoveryRoots: [URL] = []
     private let fm = FileManager.default
     private var embedding: NLEmbedding?
     private var loadedEmbedding = false
@@ -26,6 +27,11 @@ public actor FileLibrary {
     private func model() -> NLEmbedding? {
         if !loadedEmbedding { embedding = NLEmbedding.sentenceEmbedding(for: .english); loadedEmbedding = true }
         return embedding
+    }
+    /// Search scope is separate from explicit organization targets. Discovery never authorizes moves.
+    public func enableDefaultDiscovery(home: URL) {
+        let common = ["Downloads", "Documents", "Desktop", "Pictures", "Music", "Movies"].map { home.appendingPathComponent($0, isDirectory: true).canonical }
+        discoveryRoots = common.filter { fm.fileExists(atPath: $0.path) } + [home.canonical]
     }
     public func addRoot(_ url: URL) throws {
         let root = url.canonical
@@ -54,20 +60,20 @@ public actor FileLibrary {
     }
     public func scan() throws -> ScanReport {
         let old = Dictionary(uniqueKeysWithValues: state.files.map { ($0.url, $0) })
-        var files: [FileRecord] = []; var skipped = 0
+        var files: [FileRecord] = []; var skipped = 0; var seen = Set<String>()
         let embed = model()
         func visit(_ folder: URL, root: URL) {
             guard let children = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey, .isPackageKey, .fileSizeKey, .contentModificationDateKey], options: [.skipsHiddenFiles]) else { skipped += 1; return }
             for url in children.sorted(by: { $0.path < $1.path }) {
-                guard files.count < 2000 else { skipped += 1; continue }
+                guard files.count < 2000 else { skipped += 1; return }
                 guard !["node_modules", "Library", "build", "dist"].contains(url.lastPathComponent), !FileRules.contains(directory, url.canonical) else { continue }
                 do {
                     let v = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey, .isPackageKey, .fileSizeKey, .contentModificationDateKey])
                     guard v.isSymbolicLink != true else { continue }
-                    _ = try authorized(url)
                     let project = v.isDirectory == true && (v.isPackage == true || FileRules.packageExtensions.contains(url.pathExtension.lowercased()))
                     if v.isDirectory == true && !project { visit(url, root: root); continue }
                     guard v.isRegularFile == true || project else { continue }
+                    guard seen.insert(url.canonical.path).inserted else { continue }
                     let size = Int64(v.fileSize ?? 0), modified = v.contentModificationDate ?? .distantPast
                     let nameSensitive = FileRules.sensitive(url.lastPathComponent)
                     let text = nameSensitive || project ? "" : extractedText(url, size: size)
@@ -80,7 +86,10 @@ public actor FileLibrary {
                 } catch { skipped += 1 }
             }
         }
-        for root in state.roots { visit(root, root: root) }
+        for root in state.roots + discoveryRoots {
+            guard files.count < 2000 else { skipped += 1; break }
+            visit(root, root: root)
+        }
         state.files = files; proposals = []; try save()
         return ScanReport(state: state, skipped: skipped, embeddingsAvailable: embed != nil)
     }
@@ -135,7 +144,7 @@ public actor FileLibrary {
     }
     public func previewOrganization() throws -> [MoveProposal] {
         proposals = []
-        for file in state.files where !file.sensitive && !file.isProject && file.url.deletingLastPathComponent().canonical.path == file.root.canonical.path && Date().timeIntervalSince(file.modified) > 10 {
+        for file in state.files where state.roots.contains(where: { $0.canonical.path == file.root.canonical.path }) && !file.sensitive && !file.isProject && file.url.deletingLastPathComponent().canonical.path == file.root.canonical.path && Date().timeIntervalSince(file.modified) > 10 {
             let source = try authorized(file.url)
             proposals.append(MoveProposal(id: file.id, source: source, destination: file.root.appendingPathComponent("Organized/\(file.category)/\(file.name)"), digest: try FileIntegrity.digest(source)))
         }

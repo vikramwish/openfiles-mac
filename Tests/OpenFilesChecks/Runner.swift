@@ -40,6 +40,9 @@ struct Runner {
             ("Folder boundaries and symbolic links", { try await $0.testBoundariesAndSymlinks() }),
             ("Sensitive project exclusion", { try await $0.testSensitiveProjectContentCannotEnterHistory() }),
             ("Destination symlink refusal", { try await $0.testOrganizationCannotFollowDestinationSymlink() }),
+            ("Browser without connected roots or index cap", { try await $0.testBrowserWorksWithoutConnectedRootsAndHasNoIndexCap() }),
+            ("Browser folder creation and symlink navigation", { try await $0.testBrowserFolderCreationAndSymlinkNavigation() }),
+            ("Default discovery cannot authorize organization", { try await $0.testDefaultSearchDiscoveryDoesNotAuthorizeOrganization() }),
             ("File categories and similarity", { $0.testPureRules() })
         ]
         for (name, check) in checks {

@@ -6,7 +6,7 @@ Create a short-lived branch (`codex/<topic>` for agent changes, or your team's c
 
 ## Boundaries
 
-- `OpenFilesCore` owns filesystem access, persistence, embeddings, moves, snapshots, and encrypted storage. Keep slow work off the main actor.
+- `OpenFilesCore` owns the independent filesystem browser, filesystem access, persistence, embeddings, moves, snapshots, and encrypted storage. Keep slow work off the main actor.
 - `OpenFiles` owns user consent, native file pickers, progress, navigation, and error presentation. Pass selected URLs to the core; do not embed destructive operations in view code.
 - Add meaningful tests when changing moves, restores, snapshots, or exclusion rules. Use temporary fixtures. Never scan a developer's home folder in tests.
 - Do not commit personal files, model caches, disk images, app bundles, API keys, or generated build output.
@@ -15,4 +15,4 @@ Create a short-lived branch (`codex/<topic>` for agent changes, or your team's c
 
 ## Manual smoke test
 
-Start with the sample library. Search for a filename and a topic, reveal/open a result, preview and apply organization, commit a file, modify it, and restore to a new copy. Test a project package, destination collision, and changed source. Create a temporary vault, import a disposable file, lock, reject a wrong password, unlock, and verify the file. Never use irreplaceable files for early feature testing.
+Start in Home without connecting a folder. Browse to a disposable fixture, test back/forward/up and Go to folder, then search this Mac for a known filename and preview it. Search for a topic, open a result, preview and apply organization, commit a file, modify it, and restore to a new copy. Test a project package, destination collision, and changed source. Create a temporary vault, import a disposable file, lock, reject a wrong password, unlock, and verify the file. Never use irreplaceable files for early feature testing.
