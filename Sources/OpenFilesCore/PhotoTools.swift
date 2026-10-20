@@ -35,6 +35,15 @@ public enum PhotoDuplicates {
             .map { PhotoDuplicateGroup(id: $0.key, items: $0.value.sorted { $0.id < $1.id }) }
             .sorted { $0.id < $1.id }
     }
+    /// Revalidate every affected group, including the copies that will remain.
+    public static func validateRecheck(_ selected: Set<String>, in groups: [PhotoDuplicateGroup], current: [PhotoFingerprint]) throws {
+        try validate(selected, in: groups)
+        let affected = groups.filter { group in group.items.contains { selected.contains($0.id) } }.flatMap(\.items)
+        let fresh = Dictionary(current.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        guard Set(fresh.keys) == Set(affected.map(\.id)), affected.allSatisfy({ item in
+            item.signature != nil && fresh[item.id]?.signature == item.signature
+        }) else { throw OpenFilesError.message("A selected photo or its retained copy changed. Review duplicates again.") }
+    }
     /// A cleanup request must name reviewed items and retain one member of each group.
     public static func validate(_ selected: Set<String>, in groups: [PhotoDuplicateGroup]) throws {
         let known = Set(groups.flatMap { $0.items.map(\.id) })
@@ -72,7 +81,10 @@ public enum PhotoArchive {
         let allowed = NativeImageContent.extensions.union(["dng", "cr2", "cr3", "nef", "arw", "orf", "raf", "rw2", "mov", "mp4", "m4v"])
         for root in roots {
             guard root.resolvingSymlinksInPath().standardizedFileURL.path == root.standardizedFileURL.path else { throw OpenFilesError.message("Linked original folders are not inspected.") }
-            guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey], options: [.skipsHiddenFiles], errorHandler: { _, _ in false }) else { continue }
+            var enumerationError: Error?
+            guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey], options: [.skipsHiddenFiles], errorHandler: { _, error in enumerationError = error; return false }) else {
+                throw OpenFilesError.message("The originals folder could not be read.")
+            }
             while let url = walker.nextObject() as? URL {
                 try Task.checkCancellation()
                 let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey])
@@ -90,7 +102,9 @@ public enum PhotoArchive {
                 } catch is CancellationError { throw CancellationError() }
                 catch { skipped += 1 }
             }
+            if let enumerationError { throw enumerationError }
         }
+        try Task.checkCancellation()
         return PhotoArchiveReview(library: library, photos: photos.sorted { $0.url.path < $1.url.path }, groups: PhotoDuplicates.groups(fingerprints), skipped: skipped)
     }
 }

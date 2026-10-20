@@ -43,6 +43,11 @@ struct PhotoLibraryView: View {
                         Text("Duplicates · \(model.groups.count) groups").tag(true)
                     }.pickerStyle(.segmented).frame(maxWidth: 430)
                     Spacer()
+                    if model.duplicatesOnly && !model.groups.isEmpty {
+                        Button("Select extra copies") { model.selectExtraCopies() }.disabled(model.busy)
+                    } else if !model.visibleItems.isEmpty {
+                        Button("Select shown") { model.selected = Set(model.visibleItems.map(\.id)) }.disabled(model.busy)
+                    }
                     Text("\(model.selected.count) selected").font(.callout).foregroundStyle(.secondary)
                     if !model.selected.isEmpty { Button("Deselect") { model.selected = [] } }
                 }
@@ -148,6 +153,7 @@ struct PhotoLibraryView: View {
                         if let date = item.date { Text(date, format: .dateTime.year().month(.abbreviated).day()) }
                         if item.favorite { Image(systemName: "heart.fill").accessibilityLabel("Favorite") }
                     }.font(.caption2).foregroundStyle(.secondary)
+                    if !item.albums.isEmpty { Text(item.albums.joined(separator: ", ")).font(.caption2).foregroundStyle(.secondary).lineLimit(1).help(item.albums.joined(separator: ", ")) }
                 }.padding(8).background(model.selected.contains(item.id) ? Color.accentColor.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
             }
         }

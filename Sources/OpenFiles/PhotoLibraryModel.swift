@@ -12,6 +12,7 @@ struct LibraryPhoto: Identifiable {
     let url: URL?
     let asset: PHAsset?
     var terms: [String]
+    var albums: [String] = []
 }
 
 private final class PhotoResourceHash: @unchecked Sendable {
@@ -43,16 +44,39 @@ final class PhotoLibraryModel: ObservableObject {
     private var reviewed: [String: PhotoFingerprint] = [:]
     private var revisions: [String: Date] = [:]
     private var analysis: [String: [String]] = [:]
+    private var analysisRevisions: [String: Date] = [:]
+    private var archiveAnalysisStamps: [String: FileStamp] = [:]
     var selectedItems: [LibraryPhoto] { items.filter { selected.contains($0.id) } }
     var visibleItems: [LibraryPhoto] {
         let duplicateIDs = Set(groups.flatMap { $0.items.map(\.id) })
-        let words = FileSearchQuery.words(query)
+        let plan = NavigationQuery(query)
         return items.filter { item in
-            (!duplicatesOnly || duplicateIDs.contains(item.id)) && words.allSatisfy { word in
-                FileSearchQuery.words(([item.name, item.date?.formatted(date: .long, time: .omitted) ?? ""] + item.terms).joined(separator: " ")).contains { $0.hasPrefix(word) }
-            }
+            guard !duplicatesOnly || duplicateIDs.contains(item.id) else { return false }
+            if let after = plan.after, (item.date ?? .distantPast) < after { return false }
+            if let before = plan.before, (item.date ?? .distantFuture) >= before { return false }
+            let text = ([item.name, item.date?.formatted(date: .long, time: .omitted) ?? "", "photo photos picture pictures image images"] + item.terms).joined(separator: " ")
+            let words = Set(FileSearchQuery.words(text))
+            if let place = plan.photoLocation, !Set(FileSearchQuery.words(place)).isSubset(of: words) { return false }
+            if let album = plan.location, !item.albums.contains(where: { $0.localizedCaseInsensitiveContains(album) }) { return false }
+            return plan.topic.groups.allSatisfy { group in group.contains { alias in
+                FileSearchQuery.words(alias).allSatisfy { word in words.contains { $0.hasPrefix(word) } }
+            } }
         }
     }
+    func selectExtraCopies() {
+        let byID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        selected = Set(groups.flatMap { group -> [String] in
+            let ranked = group.items.sorted { lhs, rhs in
+                let a = byID[lhs.id], b = byID[rhs.id]
+                if a?.favorite != b?.favorite { return a?.favorite == true }
+                if a?.date != b?.date { return (a?.date ?? .distantFuture) < (b?.date ?? .distantFuture) }
+                return lhs.id < rhs.id
+            }
+            return ranked.dropFirst().map(\.id)
+        })
+        status = "Selected extra copies for your review. Favorites and earlier dates are preferred for the kept copy; no photos have been removed."
+    }
+
     var canRemoveDuplicates: Bool {
         guard !busy, archive == nil, connected else { return false }
         return (try? PhotoDuplicates.validate(selected, in: groups)) != nil
@@ -67,7 +91,7 @@ final class PhotoLibraryModel: ObservableObject {
                 throw OpenFilesError.message("Photo access wasn’t granted. You can enable it for OpenFiles in System Settings → Privacy & Security → Photos, or choose a library for read-only inspection.")
             }
             self.archive = nil; self.connected = true
-            self.reload()
+            try await self.reload()
         }
     }
     func refresh() {
@@ -75,21 +99,37 @@ final class PhotoLibraryModel: ObservableObject {
         run {
             let access = PHPhotoLibrary.authorizationStatus(for: .readWrite)
             guard access == .authorized || access == .limited else { throw OpenFilesError.message("Photo access changed. Connect Photos again to refresh.") }
-            self.reload()
+            try await self.reload()
         }
     }
-    private func reload() {
-        let options = PHFetchOptions(); options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        let fetched = PHAsset.fetchAssets(with: options)
-        var photos: [LibraryPhoto] = []
-        fetched.enumerateObjects { asset, _, _ in
-            guard asset.mediaType == .image || asset.mediaType == .video else { return }
-            let resources = PHAssetResource.assetResources(for: asset)
-            var terms = self.analysis[asset.localIdentifier] ?? []
-            if let location = asset.location { terms += PhotoMediaAnalysis.placeTerms(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude) }
-            if asset.isFavorite { terms += ["favorite", "favourite"] }
-            photos.append(.init(id: asset.localIdentifier, name: resources.first?.originalFilename ?? "Photo", date: asset.creationDate, favorite: asset.isFavorite, url: nil, asset: asset, terms: terms))
+    private func reload() async throws {
+        let knownAnalysis = analysis, knownRevisions = analysisRevisions
+        let loader = Task.detached(priority: .utility) { () throws -> [LibraryPhoto] in
+            let options = PHFetchOptions(); options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+            let fetched = PHAsset.fetchAssets(with: options)
+            var albums: [String: [String]] = [:]
+            PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil).enumerateObjects { album, _, _ in
+                guard let title = album.localizedTitle else { return }
+                PHAsset.fetchAssets(in: album, options: nil).enumerateObjects { asset, _, _ in albums[asset.localIdentifier, default: []].append(title) }
+            }
+            var photos: [LibraryPhoto] = []
+            for index in 0..<fetched.count {
+                try Task.checkCancellation()
+                let asset = fetched.object(at: index)
+                guard asset.mediaType == .image || asset.mediaType == .video else { continue }
+                let resources = PHAssetResource.assetResources(for: asset)
+                let memberAlbums = albums[asset.localIdentifier] ?? []
+                var terms = knownRevisions[asset.localIdentifier] == (asset.modificationDate ?? .distantPast) ? knownAnalysis[asset.localIdentifier] ?? [] : []
+                terms += memberAlbums
+                if let location = asset.location { terms += PhotoMediaAnalysis.placeTerms(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude) }
+                if asset.isFavorite { terms += ["favorite", "favourite"] }
+                if asset.mediaType == .video { terms += ["video", "movie"] }
+                photos.append(.init(id: asset.localIdentifier, name: resources.first?.originalFilename ?? "Photo", date: asset.creationDate, favorite: asset.isFavorite, url: nil, asset: asset, terms: terms, albums: memberAlbums))
+            }
+            return photos
         }
+        let photos = try await withTaskCancellationHandler { try await loader.value } onCancel: { loader.cancel() }
+        try Task.checkCancellation()
         items = photos; groups = []; reviewed = [:]; revisions = [:]; selected = []
         status = "\(photos.count) photos and videos available through macOS. Cloud-only originals may need downloading."
     }
@@ -101,12 +141,16 @@ final class PhotoLibraryModel: ObservableObject {
     }
     func inspect(_ url: URL) {
         run {
-            let result = try await Task.detached(priority: .utility) {
-                try await PhotoArchive.review(url) { count in await MainActor.run { self.status = "Checking local originals · \(count) read" } }
-            }.value
+            let scanner = Task.detached(priority: .utility) {
+                try await PhotoArchive.review(url) { count in
+                    if count % 25 == 0 { await MainActor.run { self.status = "Checking local originals · \(count) read" } }
+                }
+            }
+            let result = try await withTaskCancellationHandler { try await scanner.value } onCancel: { scanner.cancel() }
+            try Task.checkCancellation()
             self.archive = result.library; self.connected = true; self.groups = result.groups
             self.reviewed = Dictionary(result.groups.flatMap(\.items).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            self.items = result.photos.map { .init(id: $0.id, name: $0.url.lastPathComponent, date: $0.stamp.modified, favorite: false, url: $0.url, asset: nil, terms: self.analysis[$0.id] ?? []) }
+            self.items = result.photos.map { .init(id: $0.id, name: $0.url.lastPathComponent, date: $0.stamp.modified, favorite: false, url: $0.url, asset: nil, terms: self.archiveAnalysisStamps[$0.id] == $0.stamp ? self.analysis[$0.id] ?? [] : []) }
             self.selected = []; self.duplicatesOnly = !result.groups.isEmpty
             self.status = "\(result.photos.count) local originals · \(result.groups.count) duplicate groups · \(result.skipped) skipped. Read-only library inspection; edits and albums are available through Connect Photos."
         }
@@ -151,7 +195,9 @@ final class PhotoLibraryModel: ObservableObject {
             hashes.append(result)
         }
         guard let current = fetch(asset.localIdentifier), current.modificationDate == date else { throw OpenFilesError.message("Photo changed during review") }
-        return PhotoFingerprint(id: asset.localIdentifier, resources: hashes)
+        let result = PhotoFingerprint(id: asset.localIdentifier, resources: hashes)
+        guard result.signature != nil else { throw OpenFilesError.message("An original resource is empty or unavailable") }
+        return result
     }
     func removeSelectedDuplicates() {
         let selection = selected, plan = groups
@@ -160,18 +206,20 @@ final class PhotoLibraryModel: ObservableObject {
             try PhotoDuplicates.validate(selection, in: plan)
             let affected = plan.filter { !$0.items.allSatisfy { !selection.contains($0.id) } }
             // Recheck both removed photos and retained copies immediately before the library transaction.
+            var fresh: [PhotoFingerprint] = []
             for item in affected.flatMap(\.items) {
                 try Task.checkCancellation()
-                guard let asset = self.fetch(item.id), asset.modificationDate ?? .distantPast == self.revisions[item.id],
-                      let expected = self.reviewed[item.id]?.signature,
-                      try await self.fingerprint(asset).signature == expected else {
+                guard let asset = self.fetch(item.id), (asset.modificationDate ?? .distantPast) == self.revisions[item.id] else {
                     throw OpenFilesError.message("The library changed since review. Check duplicates again before removing anything.")
                 }
+                fresh.append(try await self.fingerprint(asset))
             }
+            try PhotoDuplicates.validateRecheck(selection, in: plan, current: fresh)
+            try Task.checkCancellation()
             let assets = PHAsset.fetchAssets(withLocalIdentifiers: Array(selection), options: nil)
             guard assets.count == selection.count else { throw OpenFilesError.message("A selected photo is no longer available. Check duplicates again.") }
             try await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.deleteAssets(assets) }
-            self.reload(); self.status = "Removed \(selection.count) reviewed duplicates through macOS Photos. Library deletion may sync to iCloud and your other devices."
+            try await self.reload(); self.status = "Removed \(selection.count) reviewed duplicates through macOS Photos. Library deletion may sync to iCloud and your other devices."
         }
     }
     func createAlbum() {
@@ -184,6 +232,7 @@ final class PhotoLibraryModel: ObservableObject {
                 let album = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: name)
                 album.addAssets(assets)
             }
+            try await self.reload()
             self.albumName = ""; self.status = "Added \(ids.count) photos to \(name). Originals stay in the library."
         }
     }
@@ -195,7 +244,7 @@ final class PhotoLibraryModel: ObservableObject {
             try await PHPhotoLibrary.shared().performChanges {
                 assets.enumerateObjects { asset, _, _ in PHAssetChangeRequest(for: asset).isFavorite = value }
             }
-            self.reload(); self.status = value ? "Selected photos marked as favorites." : "Favorites updated."
+            try await self.reload(); self.status = value ? "Selected photos marked as favorites." : "Favorites updated."
         }
     }
     func exportSelected() {
@@ -237,7 +286,9 @@ final class PhotoLibraryModel: ObservableObject {
             var count = 0, skipped = 0
             for (index, item) in snapshot.enumerated() {
                 try Task.checkCancellation(); self.status = "Understanding photo contents · \(index + 1) of \(snapshot.count)"
-                if self.analysis[item.id] != nil { continue }
+                let revision = item.asset?.modificationDate ?? .distantPast
+                if let url = item.url, let stamp = try? FileStamp.read(url), self.archiveAnalysisStamps[item.id] == stamp, self.analysis[item.id] != nil { continue }
+                if item.asset != nil && self.analysisRevisions[item.id] == revision && self.analysis[item.id] != nil { continue }
                 do {
                     let imageURL: URL, temporary: Bool
                     if let url = item.url { imageURL = url; temporary = false }
@@ -250,10 +301,14 @@ final class PhotoLibraryModel: ObservableObject {
                     defer { if temporary { try? FileManager.default.removeItem(at: imageURL) } }
                     let url = imageURL
                     let terms = try await Task.detached(priority: .utility) { try PhotoMediaAnalysis.terms(at: url) }.value
+                    try Task.checkCancellation()
                     self.analysis[item.id] = terms
+                    if let url = item.url { self.archiveAnalysisStamps[item.id] = try FileStamp.read(url) }
+                    else { self.analysisRevisions[item.id] = revision }
                     if let i = self.items.firstIndex(where: { $0.id == item.id }) { self.items[i].terms += terms }
                     count += 1
-                } catch { skipped += 1 }
+                } catch is CancellationError { throw CancellationError() }
+                catch { skipped += 1 }
             }
             self.status = "Photo content search ready · \(count) analyzed · \(skipped) unavailable or unsupported. Analysis stays on this Mac."
         }

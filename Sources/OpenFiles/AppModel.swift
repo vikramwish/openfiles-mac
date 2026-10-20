@@ -408,6 +408,7 @@ final class AppModel: ObservableObject {
     private func search() {
         searchTask?.cancel(); systemSearch.stop(); searchGeneration = UUID()
         spotlightItems = []; semanticItems = []; searchingSystem = false; searchResultCount = 0
+        guard section != .photos else { return }
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines), token = searchGeneration
         guard !text.isEmpty else { browserItems = folderItems; return }
         // Local filename matches appear immediately, even before Spotlight finishes gathering.
@@ -444,7 +445,7 @@ final class AppModel: ObservableObject {
     func open(_ item: BrowserItem, reveal: Bool = false) {
         if reveal { navigate(to: item.url.deletingLastPathComponent()); selectedURL = item.url; return }
         if item.isFolder { navigate(to: item.url); return }
-        if item.kind == "Photos Library" { photoLibrary.inspect(item.url); section = .photos; return }
+        if item.kind == "Photos Library" { query = ""; photoLibrary.inspect(item.url); section = .photos; return }
         Task {
             do {
                 _ = try await NSWorkspace.shared.open(item.url, configuration: .init())

@@ -31,6 +31,15 @@ func checkEqual(_ lhs: Double, _ rhs: Double, accuracy: Double, file: StaticStri
 @main
 struct Runner {
     static func main() async {
+        if CommandLine.arguments.contains("--organization") {
+            for (name, check) in OrganizationChecks.scenarios {
+                let previous = log.failures
+                do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(OrganizationChecks.scenarios.count) organization scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
         if CommandLine.arguments.contains("--photo-tools") {
             for (name, scenario) in PhotoToolChecks.scenarios {
                 let previous = log.failures

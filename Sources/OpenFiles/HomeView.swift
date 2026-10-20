@@ -42,7 +42,7 @@ struct HomeView<Content: View>: View {
                     Button("Find", action: findFiles)
                         .disabled(search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }.padding(12).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 140), spacing: 8), count: 3), spacing: 8) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 140), spacing: 8), count: 4), spacing: 8) {
                     ForEach(tasks, id: \.0) { task in
                         Button {
                             showingResults = false

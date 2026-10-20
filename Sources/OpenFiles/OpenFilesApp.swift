@@ -75,7 +75,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         } catch {
             model.error = "Could not load UI smoke fixture: \(error.localizedDescription)"
         }
-        switch ProcessInfo.processInfo.environment["OPENFILES_UI_SMOKE_SECTION"] ?? "home" {
+        switch ProcessInfo.processInfo.environment["OPENFILES_UI_SMOKE_SECTION"] ?? Bundle.main.object(forInfoDictionaryKey: "OpenFilesUISmokeSection") as? String ?? "home" {
+        case "photos":
+            model.section = .photos
+            if let fixture = smokeRoot?.appendingPathComponent("Demo.photoslibrary"), FileManager.default.fileExists(atPath: fixture.path) {
+                model.photoLibrary.inspect(fixture)
+            }
         case "packs": model.section = .packs
         case "protection": model.section = .protection
         case "history": model.section = .history
