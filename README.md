@@ -4,7 +4,7 @@ A native macOS file search utility with a Spotlight-style search panel, local do
 
 ## Run
 
-Requires **macOS 14+** and **Swift 5.9+** (Xcode or Command Line Tools). No npm, API keys, backend, or third-party packages.
+Requires **macOS 14+** and **Swift 5.9+** (Xcode or Command Line Tools). No npm, backend, or third-party packages. Local features need no credentials; optional Google Drive and OneDrive connections need native OAuth app registrations.
 
 ```sh
 git clone https://github.com/yatinbayya/OpenFiles.git
@@ -15,10 +15,11 @@ make run
 `make run` compiles, assembles, ad-hoc signs, and opens `build/OpenFiles.app`. It stays available in the macOS menu bar after its window closes. Quit from the menu bar or with ⌘Q. Rebuild after changes; quit a running copy before replacing its executable. Open `Package.swift` in Xcode if you prefer its editor and debugger.
 
 ```sh
-make test       # Core behavior tests; no access to your personal folders
+make test       # Local and mocked cloud checks; no personal folders or accounts
 make build      # Build the local .app without launching
 make release    # Optimized, locally signed .app
 OPENFILES_TEST_VAULT=1 swift run --build-system native OpenFilesChecks
+swift run --build-system native OpenFilesCloudChecks  # Mocked provider checks; no accounts needed
 ```
 
 Checks use a small dependency-free executable because Command Line Tools do not ship XCTest. They return a nonzero exit code on failure. The scripts select SwiftPM's `native` build engine because the Swift 6.4 Command Line Tools on the initial development machine cannot initialize the default Swift Build engine. This option also works with Swift 5.9. No full Xcode installation is needed to run locally.
@@ -57,6 +58,12 @@ Choose **Browse files** or a sidebar location to use the Finder-like browser. Th
 
 Use **File → New Window** (⌘N) or **New Window** in the OpenFiles menu bar menu to open another workspace. Each window keeps its own folder, selection, search, navigation history, and commit message. Indexing, version history, and vault state are shared; menu commands follow the active window. Closing one window leaves the others open.
 
+## Google Drive and OneDrive
+
+Use **Cloud storage** to connect directly to Google Drive or Microsoft OneDrive, browse remote folders, and save selected files as local copies. The providers' Mac sync apps are not required. Each connection asks for read-only access; uploads, deletion, two-way sync, and remote semantic search are not implemented. Google Workspace documents open in the provider's website.
+
+You need a native OAuth app registration for each provider. Registration fields and tokens are stored in macOS Keychain. See [cloud storage setup](docs/CLOUD_STORAGE.md) for registration, permissions, account connection, and validation instructions. Remote contents are not automatically indexed, organized, or snapshotted; copies saved locally can enter the normal local indexing workflow.
+
 ## Organization, history, and vault
 
 **Organize → Analyze My Files** compares existing content embeddings across nested personal folders throughout your home and added locations. It suggests content topics (Work, Study, Travel, Home, Creative, Purchases, Events, Cooking) under `~/Organized`, with source/destination paths, similarity scores, and exclusion counts. Review up to 200 suggestions per pass, select individual files, then choose **Move Selected Files**. Analysis never moves files. Filename-only embeddings, uncertain matches, sensitive files, recognized projects, and system/app folders are excluded. Only indexed content can be analyzed; indexing activity shows remaining coverage. [Organization behavior and limits](docs/ORGANIZATION.md).
@@ -76,6 +83,7 @@ Create a password-protected **Private vault**, copy a file in, and lock it. Brow
 | Area | Working now | Extension work |
 | --- | --- | --- |
 | Browsing | Direct filesystem browser, default locations/volumes, history, breadcrumbs, hidden files, path navigation, Quick Look, new folders | Rename, move/copy, Trash, multi-selection, drag/drop, sorting and view modes |
+| Cloud storage | Direct Google Drive/OneDrive sign-in, paginated remote browsing, local downloads, Keychain credentials | Uploads, sync/conflict handling, multiple accounts per provider, shared drives, Workspace exports, remote search |
 | Search | System-wide Spotlight search plus automatic local English embeddings; bounded text/PDF extraction | Chunked index, OCR, Office parsers, multilingual models, SQLite/vector index |
 | Organization | Extension rules, exact move preview, collision refusal, content verification, optional one-minute automation | Rule editor, undo journal, filesystem events, model-based classification |
 | Sensitive files | Filename/content heuristics exclude likely matches from embeddings, snapshots, and organization; encrypted APFS vault | Reviewed sensitive-file migration, richer detection, encrypted metadata |
@@ -92,7 +100,7 @@ The index now checks Git-style file signatures before reading content and shares
 
 ## Data and privacy
 
-All application state lives in `~/Library/Application Support/OpenFiles/`:
+Local library and vault state lives in `~/Library/Application Support/OpenFiles/`:
 
 - `library.json`: organization targets, file metadata, embedding vectors, and version metadata. Normalized unique search terms from bounded document prefixes are persisted for fast lookup; full extracted text is not retained. Sensitive-classified content has no stored terms or embeddings. This index is **not encrypted**; terms, filenames, paths, and embeddings can reveal information.
 - `IndexObjects/<hash>.json`: model-versioned, content-addressed vectors and word-unit/timing metadata; extracted document text is not retained. Objects remain until future cache cleanup.
@@ -100,7 +108,9 @@ All application state lives in `~/Library/Application Support/OpenFiles/`:
 - `Private.sparsebundle`: AES-256 encrypted APFS disk image, 10 GB logical capacity, allocated as needed.
 - `vault-mount/`: mount point while unlocked. Vault content is accessible to the logged-in user and their processes while mounted. Passwords are not stored, logged, or passed as process arguments; there is no password recovery.
 
-No telemetry, cloud API, or automatic model download is implemented. Browsing can visit any accessible location. Spotlight search results are not persisted. Automatic semantic indexing excludes hidden files, symbolic links, common generated directories, app data, and vault content. New semantic indexes default to unlimited files, with configurable 2,000/10,000 limits; text extraction at 5 MB files / 12,000 characters; PDFs at 20 pages; embeddings at 4,000 characters. Native packages are treated as single projects. Sensitive detection cannot find every secret, especially in opaque binary formats.
+Optional cloud connections use the Google Drive API and Microsoft Graph. Their OAuth tokens and registration fields live in macOS Keychain; remote listings remain in memory, and downloads go to a location you choose. See [cloud data and permissions](docs/CLOUD_STORAGE.md#data-and-permissions). Disconnect removes local authorization; provider-side revocation is managed in the provider's account settings.
+
+No telemetry or automatic model download is implemented. Browsing can visit any accessible location. Spotlight search results are not persisted. Automatic semantic indexing excludes hidden files, symbolic links, common generated directories, app data, and vault content. New semantic indexes default to unlimited files, with configurable 2,000/10,000 limits; text extraction at 5 MB files / 12,000 characters; PDFs at 20 pages; embeddings at 4,000 characters. Native packages are treated as single projects. Sensitive detection cannot find every secret, especially in opaque binary formats.
 
 This is an unsandboxed, locally signed developer app. macOS may ask for access to protected folders during browsing or automatic indexing. Distribution needs a stable signing identity, hardened runtime/notarization, and a decision about sandboxing and security-scoped bookmarks.
 
@@ -118,7 +128,8 @@ swift run --build-system native -c release OpenFilesBenchmark --search-only --co
 
 - UI and application state: `Sources/OpenFiles/`
 - Search, file rules, snapshots, filesystem boundaries, vault: `Sources/OpenFilesCore/`
-- Tests: `Tests/OpenFilesChecks/`
+- Cloud provider requests, OAuth exchange, refresh, downloads: `Sources/OpenFilesCloud/`
+- Tests: `Tests/OpenFilesChecks/` and `Tests/OpenFilesCloudChecks/`
 - Build/run: `scripts/` and `Makefile`
 - Architecture and implementation sequence: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Collaboration conventions: [CONTRIBUTING.md](CONTRIBUTING.md)

@@ -7,11 +7,13 @@ private typealias ViewState<Value> = SwiftUI.State<Value>
 private let line = Color.primary.opacity(0.09)
 private let surface = Color(nsColor: .controlBackgroundColor)
 
+@MainActor
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @ViewState private var columns: NavigationSplitViewVisibility = .all
     @ViewState private var showsInspector = true
     @ViewState private var focusSearchRequest = 0
+    @StateObject private var cloudModel = CloudBrowserModel()
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
             sidebar
@@ -21,6 +23,7 @@ struct ContentView: View {
                 Group {
                     switch model.section {
                     case .files: files
+                    case .cloud: CloudBrowserView(model: cloudModel)
                     case .organize: organization
                     case .history: history
                     case .vault: VaultView()

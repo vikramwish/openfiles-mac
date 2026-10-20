@@ -7,7 +7,7 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - name: Test core
-        run: swift run --build-system native OpenFilesChecks
+      - name: Test local and cloud storage
+        run: make test
       - name: Build native app
         run: ./scripts/build-app.sh

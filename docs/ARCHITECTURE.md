@@ -22,6 +22,18 @@ The shared `VersionHistoryView` contains change selection, the commit-message co
 
 `EncryptedVault` invokes `/usr/bin/hdiutil` with fixed arguments and a null-terminated password through stdin. The encrypted APFS sparse bundle grows to a logical maximum of 10 GB. Import copies and verifies a regular file; it intentionally retains the original. Vault contents cannot be indexed or snapshotted because app data is excluded. The UI reports the mount state, clears password input after submission, and attempts unmount before quitting. There is no recovery key or Keychain storage.
 
+## Cloud providers
+
+`OpenFilesCloud` is a Foundation-only module with separate models for remote items. `CloudClient` is an actor that builds provider-specific OAuth requests, exchanges and refreshes tokens, lists paginated folders, and downloads selected files. `CloudHTTPTransport` and `CloudCredentialStore` are injectable so provider behavior can be checked without credentials or access to personal accounts. The existing `LibraryState` format is unchanged; remote IDs never enter the filesystem browser as local URLs.
+
+The macOS app owns `CloudBrowserModel`, the explicit connection workflow, and a separate cloud browser. Folder navigation and provider switching use cancellation/generation checks to reject stale results. Remote metadata remains in memory and does not participate in semantic indexing, organization, or version history. A user-selected download becomes an ordinary local file after it is saved.
+
+`CloudAuthenticator` uses the system browser, authorization code flow with PKCE S256, random state, and an ephemeral listener bound to loopback. It validates callbacks and cleans up on completion, cancellation, or timeout. Google uses a desktop app registration and the read-only Drive scope; Microsoft uses a native public client and delegated `Files.Read` plus `offline_access`. `KeychainCloudStore` persists registration configuration and tokens independently of the local library. Only one account per provider is stored.
+
+HTTP redirects are not followed automatically. API pagination stays within the provider's HTTPS API origin. OneDrive content redirects are followed explicitly without the Graph bearer token. Downloads stream through temporary files, refuse an existing destination, and clean up transfer artifacts. Google Workspace items and shortcuts cannot be downloaded as ordinary bytes; eligible provider links can be opened in the browser. This is read-only browsing and copy export, not synchronization or cloud backup of the local version store.
+
+See [cloud storage setup](CLOUD_STORAGE.md) for provider registration and native integration checks. Mocked cloud checks run separately from the macOS-only filesystem, embedding, and vault checks.
+
 ## Product sequence
 
 1. **Harden storage:** schema migrations, operation journal/Undo, quota and disk-space checks, snapshot retention, cancellation, interruption recovery, and robust coordinated reads.

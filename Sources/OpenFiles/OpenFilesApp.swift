@@ -67,11 +67,11 @@ struct WorkspaceCommands: Commands {
 
             Button("Open location…") { model.chooseFolder() }.keyboardShortcut("o", modifiers: [.command, .shift])
             Button("Go to folder…") { model.requestGo() }.keyboardShortcut("g", modifiers: [.command, .shift])
-            Button("New folder…") { model.showingNewFolder = true }.keyboardShortcut("n", modifiers: [.command, .shift])
-            Button("Parent folder") { model.up() }.keyboardShortcut(.upArrow, modifiers: .command)
-            Button("Back") { model.back() }.keyboardShortcut("[", modifiers: .command)
-            Button("Forward") { model.forward() }.keyboardShortcut("]", modifiers: .command)
-            Button("Show hidden files") { model.showHidden.toggle() }.keyboardShortcut(".", modifiers: [.command, .shift])
+            Button("New folder…") { model.showingNewFolder = true }.keyboardShortcut("n", modifiers: [.command, .shift]).disabled(model.section == .cloud)
+            Button("Parent folder") { model.up() }.keyboardShortcut(.upArrow, modifiers: .command).disabled(model.section == .cloud)
+            Button("Back") { model.back() }.keyboardShortcut("[", modifiers: .command).disabled(model.section == .cloud)
+            Button("Forward") { model.forward() }.keyboardShortcut("]", modifiers: .command).disabled(model.section == .cloud)
+            Button("Show hidden files") { model.showHidden.toggle() }.keyboardShortcut(".", modifiers: [.command, .shift]).disabled(model.section == .cloud)
             Button("Commit file…") { model.chooseCommit() }.keyboardShortcut("s", modifiers: [.command, .shift])
             Button("Commit project folder…") { model.chooseCommit(project: true) }
         }

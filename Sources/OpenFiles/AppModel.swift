@@ -155,10 +155,10 @@ final class AppModel: ObservableObject {
     private var searchTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
     enum Section: String, CaseIterable, Identifiable {
-        case files = "Browse files", organize = "Organize", history = "Version history", vault = "Private vault"
+        case files = "Browse files", cloud = "Cloud storage", organize = "Organize", history = "Version history", vault = "Private vault"
         var id: String { rawValue }
-        var icon: String { switch self { case .files: "square.grid.2x2"; case .organize: "tray.2"; case .history: "clock.arrow.circlepath"; case .vault: "lock.shield" } }
-        var subtitle: String { switch self { case .files: "Find the file you’re thinking of."; case .organize: "A place for everything, with you in control."; case .history: "Keep the moments that matter."; case .vault: "An encrypted home for private files." } }
+        var icon: String { switch self { case .files: "square.grid.2x2"; case .cloud: "cloud"; case .organize: "tray.2"; case .history: "clock.arrow.circlepath"; case .vault: "lock.shield" } }
+        var subtitle: String { switch self { case .files: "Find the file you’re thinking of."; case .cloud: "Browse Google Drive and OneDrive directly."; case .organize: "A place for everything, with you in control."; case .history: "Keep the moments that matter."; case .vault: "An encrypted home for private files." } }
     }
     init(directory: URL? = nil, sharing owner: AppModel? = nil) {
         let folder = directory ?? owner?.storageDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("OpenFiles", isDirectory: true)
