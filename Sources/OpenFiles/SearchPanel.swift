@@ -105,7 +105,7 @@ final class SearchStore: ObservableObject {
         if let mode = plan.grouping { grouping = mode }
         // This is the primary path: cached postings + metadata, with no debounce or file I/O.
         local = cachedResults(text); merge()
-        let token = generation, input = text, revision = model.library.searchCatalog.revision
+        let token = generation, input = text
         task = Task {
             do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
             guard !Task.isCancelled else { return }
@@ -113,7 +113,7 @@ final class SearchStore: ObservableObject {
             if !plan.hasFilters { systemWorking = true; spotlight.search(input) }
             let matches = await model.library.searchMatches(input)
             guard generation == token, !Task.isCancelled else { return }
-            if model.library.searchCatalog.revision == revision {
+            if generation == token {
                 let refined = matches.map { match in
                     let file = match.file
                     return SearchResult(item: BrowserItem(url: file.url, isFolder: false, isPackage: file.isProject, size: file.size, modified: file.modified), score: match.score, reason: match.reason)
@@ -320,6 +320,7 @@ final class SearchPanelController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true); previewWindow?.makeKeyAndOrderFront(nil)
     }
     func shutdown() async {
+
         shortcut.unregister(); store.stop()
         for entry in workspaces.values { entry.model.closeWorkspace() }
         await cloudModel.shutdown()
@@ -436,6 +437,7 @@ private struct SearchPanelView: View {
                     .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
             Spacer(minLength: 10)
+            FileLocationTag(location: .local(result.item.url))
             Text(result.reason).font(.system(size: 9)).foregroundStyle(.secondary)
             Button { store.selected = index; store.preview?() } label: { Image(systemName: "eye") }.buttonStyle(.borderless).help("Quick Look").accessibilityLabel("Preview \(result.item.name)")
             Image(systemName: "return").font(.system(size: 10)).foregroundStyle(index == store.selected ? .secondary : .tertiary)

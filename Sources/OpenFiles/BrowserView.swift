@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import QuickLookUI
 import OpenFilesCore
+import OpenFilesCloud
 
 private typealias BrowserState<Value> = SwiftUI.State<Value>
 
@@ -67,6 +68,14 @@ struct BrowserView: View {
                     }
                 } else { fileList }
             }
+            Divider()
+            HStack {
+                VolumeStorageView(url: model.currentFolder)
+                Spacer()
+                if let item = model.selectedItem, !item.isFolder, !item.isPackage {
+                    Button("Suggest Filename…") { model.renameItem = item }.disabled(item.sensitive)
+                }
+            }.font(.caption).padding(10)
         }
     }
     @ViewBuilder private var fileList: some View {
@@ -105,6 +114,7 @@ struct BrowserView: View {
                     }
                 }.width(min: 70, ideal: model.query.isEmpty ? 90 : 180)
                 TableColumn("Kind", value: \.kind) { item in Text(item.kind).foregroundStyle(.secondary) }.width(min: 80, ideal: 100)
+                TableColumn("Stored in") { item in FileLocationTag(location: .local(item.url)) }.width(min: 100, ideal: 125)
             }
             .contextMenu(forSelectionType: URL.self) { selection in
                 if let item = model.browserItems.first(where: { selection.contains($0.url) }) {
@@ -113,6 +123,7 @@ struct BrowserView: View {
                     if !model.query.isEmpty { Button("Show Enclosing Folder") { model.open(item, reveal: true) } }
                     Divider()
                     Button("Copy Path") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(item.url.path, forType: .string) }
+                    Button("Suggest Filename…") { model.renameItem = item }.disabled(item.isFolder || item.isPackage || item.sensitive)
                     Button("Save version…") { model.prepareCommit(item) }.disabled(item.sensitive)
                 }
             } primaryAction: { selection in

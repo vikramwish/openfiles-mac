@@ -8,7 +8,7 @@ public struct BrowserItem: Identifiable, Hashable, Sendable {
     public let size: Int64
     public let modified: Date
     public var name: String { url.lastPathComponent.isEmpty ? url.path : url.lastPathComponent }
-    public var kind: String { isFolder ? "Folder" : isPackage ? "Project" : FileRules.category(url) }
+    public var kind: String { url.canonical.pathExtension.lowercased() == "photoslibrary" ? "Photos Library" : isFolder ? "Folder" : isPackage ? "Project" : FileRules.category(url) }
     public var sensitive: Bool { FileRules.sensitive(name) }
     public init(url: URL, isFolder: Bool, isPackage: Bool, size: Int64, modified: Date) {
         self.url = url; self.isFolder = isFolder; self.isPackage = isPackage; self.size = size; self.modified = modified

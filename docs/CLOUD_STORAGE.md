@@ -38,6 +38,10 @@ Open **Cloud storage**, choose a provider, and enter its registration fields. **
 
 Browse folders, return through the folder navigation, refresh a listing, or load another page of results. Choose a downloadable file and a local destination. OpenFiles refuses to replace an existing file; choose a different name or destination. Network and provider errors are displayed so you can retry. Remote browsing, uploads, and sync require an Internet connection. Existing connections do not silently gain write permission when the app is updated: enable the write option and reconnect first.
 
+Successful sign-in immediately loads the account root. Provider shortcuts in the sidebar return to the cloud browser; rows carry a provider tag and the current folder path. **Connection settings** reveals registration and disconnect controls after sign-in. **Uploads and folder sync** expands the optional transfer controls. The local browser also labels recognized iCloud, Google Drive, and OneDrive folders on this Mac; these labels describe their paths, not proof of completed synchronization or offline availability.
+
+Storage indicators show the Mac's current volume and the connected account's quota. Google uses Drive `about.storageQuota` (account usage can include Gmail and Photos); OneDrive uses Graph `me/drive.quota`. These metadata calls use existing read permissions and do not download files. Refresh updates the listing and account quota independently, so unavailable quota data does not hide files. A missing or unlimited provider limit is shown as unavailable, never zero capacity. Local capacity refreshes every minute while visible and can differ from macOS's reclaimable-space estimate.
+
 **Disconnect** removes the locally stored authorization and retains your registration fields in Keychain. It does not delete your cloud files or revoke the app's grant at the provider. To revoke provider-side access, use your [Google third-party connections](https://myaccount.google.com/connections) or Microsoft's account/application permission controls. To use a different account for a provider, disconnect and sign in again.
 
 ## Upload files

@@ -81,7 +81,8 @@ public actor CleanupService {
                   SemanticOrganizer.exclusion(url, roots: [scope], output: appData, appData: appData, excluded: exclusions, folderProtection: &folderProtection) == nil,
                   let stamp = try? safeStamp(url, scope: scope), stamp.size > 0, stamp.size <= 256 * 1024 * 1024,
                   file.indexMetadata == nil || file.indexMetadata?.stamp == stamp else { plan.skipped += 1; continue }
-            safe.append((file, stamp))
+            var normalized = file; normalized.url = url
+            safe.append((normalized, stamp))
         }
         // Only equal-size buckets require disk hashing for duplicate detection.
         let buckets = Dictionary(grouping: safe, by: { $0.1.size })
@@ -110,6 +111,7 @@ public actor CleanupService {
         // Bound similarity comparisons. A vector match is review evidence, never proof of redundancy.
         let documents = safe.filter { !$0.0.sensitive && $0.0.vector != nil && ["pdf", "txt", "md", "docx", "rtf", "pages"].contains($0.0.url.pathExtension.lowercased()) }
             .sorted { $0.1.modified > $1.1.modified }.prefix(500)
+        var similarityComparisons = 0
         for (file, stamp) in safe where !duplicatePaths.contains(file.url.path) && stamp.modified < age {
             try Task.checkCancellation()
             let ext = file.url.pathExtension.lowercased()
@@ -119,11 +121,13 @@ public actor CleanupService {
                 kind = .installer; evidence = "Installer in Downloads, last modified over 90 days ago. Check whether you still need it. Modification time does not show last use."
             } else if downloaded && ["zip", "tar", "gz", "7z", "rar"].contains(ext) {
                 kind = .archive; evidence = "Archive in Downloads, last modified over 90 days ago. Its contents may still be needed; no extraction or redundancy is assumed."
-            } else if let vector = file.vector, let engine = file.indexMetadata?.engine {
+            } else if let vector = file.vector, let engine = file.indexMetadata?.engine, similarityComparisons < 100_000 {
                 let candidates = documents.filter { $0.0.url != file.url && $0.1.modified > stamp.modified && $0.0.indexMetadata?.engine == engine && $0.0.url.pathExtension.lowercased() == ext }
                 if let match = candidates.compactMap({ other -> (URL, Double)? in
                     guard let otherVector = other.0.vector, vector.count == otherVector.count, !vector.isEmpty,
                           vector.allSatisfy(\.isFinite), otherVector.allSatisfy(\.isFinite) else { return nil }
+                    guard similarityComparisons < 100_000 else { plan.limited = true; return nil }
+                    similarityComparisons += 1
                     let score = VectorMath.cosine(vector, otherVector)
                     return score >= 0.94 ? (other.0.url, score) : nil
                 }).max(by: { $0.1 < $1.1 }) {
@@ -137,7 +141,9 @@ public actor CleanupService {
             guard let digest = try? checkedDigest(file.url, stamp: stamp, scope: scope) else { continue }
             plan.suggestions.append(CleanupFile(id: UUID(), url: file.url, bytes: stamp.size, modified: stamp.modified, kind: kind, evidence: evidence, relatedURL: related, stamp: stamp, digest: digest))
         }
+        if similarityComparisons >= 100_000 { plan.limited = true }
         plan.suggestions.sort { $0.bytes == $1.bytes ? $0.url.path < $1.url.path : $0.bytes > $1.bytes }
+        try Task.checkCancellation()
         review = plan
         return plan
     }
@@ -158,10 +164,11 @@ public actor CleanupService {
                   try checkedDigest(keeper.url, stamp: keeper.stamp, scope: plan.scope) == keeper.digest else { throw OpenFilesError.message("A retained duplicate changed or disappeared. Nothing was moved.") }
         }
         let journal = appData.appendingPathComponent("Cleanup", isDirectory: true)
-        try FileManager.default.createDirectory(at: journal, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: journal, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let recordURL = journal.appendingPathComponent(plan.id.uuidString + ".json")
         var result = CleanupResult()
         try JSONEncoder().encode(result.receipts).write(to: recordURL, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: recordURL.path)
         review = nil // A review can only be executed once, including partially successful batches.
         for file in plan.files where selected.contains(file.id) {
             do {
@@ -172,9 +179,13 @@ public actor CleanupService {
                     guard let keeper = group.files.first(where: { !selected.contains($0.id) }),
                           try checkedDigest(keeper.url, stamp: keeper.stamp, scope: plan.scope) == keeper.digest else { throw OpenFilesError.message("Retained copy changed") }
                 }
+                try Task.checkCancellation()
                 let trashed = try trash.moveToTrash(file.url)
                 result.receipts.append(CleanupReceipt(id: UUID(), original: file.url, trashed: trashed, date: Date()))
-                do { try JSONEncoder().encode(result.receipts).write(to: recordURL, options: .atomic) }
+                do {
+                    try JSONEncoder().encode(result.receipts).write(to: recordURL, options: .atomic)
+                    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: recordURL.path)
+                }
                 catch { result.errors.append("Moved to Trash, but could not save receipt: \(file.url.path)"); break }
             } catch { result.errors.append("\(file.url.lastPathComponent): \(error.localizedDescription)") }
         }

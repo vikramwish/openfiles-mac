@@ -1,16 +1,27 @@
 import SwiftUI
 import OpenFilesCore
 
-private typealias OrganizationState<Value> = SwiftUI.State<Value>
+@MainActor
+final class OrganizationSession: ObservableObject {
+    @Published var preview: OrganizationPreview?
+    @Published var selection = Set<UUID>()
+    @Published var analyzing = false
+    @Published var applying = false
+    var analysisID = UUID()
+    var analysis: Task<Void, Never>?
+}
 
+@MainActor
 struct OrganizationView: View {
     @EnvironmentObject private var model: AppModel
-    @OrganizationState private var preview: OrganizationPreview?
-    @OrganizationState private var selection = Set<UUID>()
-    @OrganizationState private var analyzing = false
-    @OrganizationState private var applying = false
-    @OrganizationState private var analysisID = UUID()
-    @OrganizationState private var analysis: Task<Void, Never>?
+    @ObservedObject var session: OrganizationSession
+    var automaticallyAnalyze = false
+    private var preview: OrganizationPreview? { get { session.preview } nonmutating set { session.preview = newValue } }
+    private var selection: Set<UUID> { get { session.selection } nonmutating set { session.selection = newValue } }
+    private var analyzing: Bool { get { session.analyzing } nonmutating set { session.analyzing = newValue } }
+    private var applying: Bool { get { session.applying } nonmutating set { session.applying = newValue } }
+    private var analysisID: UUID { get { session.analysisID } nonmutating set { session.analysisID = newValue } }
+    private var analysis: Task<Void, Never>? { get { session.analysis } nonmutating set { session.analysis = newValue } }
     private var topics: [String] { Array(Set(preview?.suggestions.map(\.topic) ?? [])).sorted() }
 
     var body: some View {
@@ -24,21 +35,23 @@ struct OrganizationView: View {
                         .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
+            if !automaticallyAnalyze {
             GroupBox {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         Label("Across this Mac", systemImage: "desktopcomputer").font(.headline)
                         Spacer()
-                        Button("Indexing Activity…") { model.showingIndexing = true }
+                        Button("Manage folders…") { model.showingIndexing = true }
                     }
-                    Text("Includes indexed files throughout your home folder and any additional locations below. Protected system folders, apps, recognized project contents, sensitive files, and uncertain matches stay in place.")
+                    Text("Apps, project contents, and potentially private files stay where they are.")
                         .font(.callout).foregroundStyle(.secondary)
                     HStack {
-                        Text("\(model.state.files.count) files currently in the index").font(.callout).foregroundStyle(.secondary)
+                        Text("\(model.state.files.count) files ready to organize").font(.callout).foregroundStyle(.secondary)
                         Spacer()
-                        Button("Update Index") { model.startIndexing() }.disabled(model.indexing)
+                        Button("Refresh files") { model.startIndexing() }.disabled(model.indexing)
                         Button("Add Location…") { preview = nil; model.chooseOrganizationFolder() }
                     }
+                    DisclosureGroup("Included folders · \(model.state.roots.count)") {
                     ForEach(model.state.roots, id: \.self) { root in
                         HStack {
                             Label(root.path, systemImage: "folder").lineLimit(1).truncationMode(.middle).help(root.path)
@@ -46,15 +59,20 @@ struct OrganizationView: View {
                             Button("Remove") { preview = nil; model.removeFolder(root) }.buttonStyle(.borderless)
                         }.font(.callout)
                     }
+                    }
                 }.padding(8)
             }.disabled(analyzing || applying)
+            } else {
+                Label("\(model.state.files.count) files available · \(model.state.roots.count) added folders", systemImage: "desktopcomputer")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
             HStack {
                 if analyzing {
                     ProgressView().controlSize(.small)
-                    Text("Comparing content embeddings and checking files…").font(.callout)
+                    Text("Finding related files…").font(.callout)
                     Button("Cancel") { analysis?.cancel(); analyzing = false }
                 } else {
-                    Button(preview == nil ? "Analyze My Files" : "Analyze Again") { analyze() }.disabled(applying)
+                    Button(preview == nil ? "Find suggestions" : "Check again") { analyze() }.disabled(applying)
                 }
                 Spacer()
                 if let preview, !preview.suggestions.isEmpty {
@@ -68,7 +86,7 @@ struct OrganizationView: View {
             if applying { ProgressView("Moving selected files and updating the index…").controlSize(.small) }
             if let preview {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("\(preview.suggestions.count) suggestions from \(preview.indexedFiles) indexed files").font(.headline)
+                    Text("\(preview.suggestions.count) suggestions from \(preview.indexedFiles) files").font(.headline)
                     Text("Destination: \(preview.destination.path)").font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                     if preview.deferred > 0 {
                         Text("\(preview.deferred) more matches are waiting. Review up to 200 suggestions per pass, then analyze again.").font(.callout).foregroundStyle(.secondary)
@@ -78,14 +96,14 @@ struct OrganizationView: View {
                             ForEach(preview.skipped.keys.sorted(), id: \.self) { reason in
                                 Text("\(preview.skipped[reason] ?? 0) · \(reason)")
                             }
-                            Text("Files not yet indexed are not analyzed. Similarity scores measure embedding distance; they are not probabilities. Filename-only embeddings are excluded.")
+                            Text("Only files with readable content are considered. Files with unclear matches stay in their current folders.")
                         }.font(.callout).foregroundStyle(.secondary).padding(.top, 6)
                     }
                 }
                 if !preview.modelAvailable {
-                    ContentUnavailableView("Content Model Unavailable", systemImage: "exclamationmark.magnifyingglass", description: Text("The local embedding model could not load. Check indexing activity and try again."))
+                    ContentUnavailableView("File understanding is unavailable", systemImage: "exclamationmark.magnifyingglass", description: Text("File understanding isn’t available right now. Check file activity and try again."))
                 } else if preview.suggestions.isEmpty {
-                    ContentUnavailableView("No Clear Matches Yet", systemImage: "checklist", description: Text("Update the index to include more content. Files with ambiguous topics stay in their current folders."))
+                    ContentUnavailableView(preview.indexedFiles == 0 ? "Add a folder to get started" : "No clear matches yet", systemImage: "folder.badge.plus", description: Text(preview.indexedFiles == 0 ? "Use Add folder above to choose the files you want OpenFiles to organize." : "Files with unclear matches stay in their current folders. Add more folders or refresh your files to find more matches."))
                 } else {
                     List {
                         ForEach(topics, id: \.self) { topic in
@@ -113,8 +131,13 @@ struct OrganizationView: View {
             }
         }.padding(24).frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
-        .onDisappear { analysis?.cancel() }
-        .onChange(of: model.state.roots) { preview = nil; selection = [] }
+        .task { if automaticallyAnalyze && preview == nil && !analyzing { analyze() } }
+        .onDisappear { analysis?.cancel(); analysisID = UUID(); analyzing = false }
+        .onChange(of: model.state.roots) {
+            analysis?.cancel(); analysisID = UUID(); analyzing = false
+            preview = nil; selection = []
+            if automaticallyAnalyze { analyze() }
+        }
     }
 
     private func analyze() {
