@@ -97,7 +97,7 @@ case "collections": model.section = .collections; model.selectedCollectionID = m
         window.minSize = NSSize(width: 980, height: 680)
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
-WindowHosting.install(ContentView(cloudModel: CloudBrowserModel()).environmentObject(model), in: window)
+WindowHosting.install(ContentView(cloudModel: CloudBrowserModel(allowsConnections: false)).environmentObject(model), in: window)
         model.showWorkspace = { [weak window] in window?.makeKeyAndOrderFront(nil) }
         model.newWorkspace = model.showWorkspace
         smokeWindow = window

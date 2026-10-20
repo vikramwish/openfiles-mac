@@ -67,6 +67,7 @@ final class AppModel: ObservableObject {
     @Published var newFolderName = ""
     @Published var previewItem: BrowserItem?
     @Published var renameItem: BrowserItem?
+    @Published var batchRenameRequest: BatchRenameRequest?
     @Published var editingURL: URL?
     @Published var syncStatus = "Loading local index"
     private var fileWatcher: FileEventWatcher?
@@ -504,13 +505,17 @@ final class AppModel: ObservableObject {
     }
     func requestGo() { pathInput = currentFolder.path; showingGo = true }
     func refreshAfterRename(from source: URL, to destination: URL) {
-        folderItems.removeAll { $0.url == source }
-        semanticItems.removeAll { $0.url == source }
-        spotlightItems.removeAll { $0.url == source }
-        browserItems.removeAll { $0.url == source }
+        refreshAfterRenames([(source, destination)])
+    }
+    func refreshAfterRenames(_ moves: [(URL, URL)]) {
+        let sources = Set(moves.map { $0.0 })
+        folderItems.removeAll { sources.contains($0.url) }
+        semanticItems.removeAll { sources.contains($0.url) }
+        spotlightItems.removeAll { sources.contains($0.url) }
+        browserItems.removeAll { sources.contains($0.url) }
         reloadFolder()
         search()
-        selectedURL = destination
+        selectedURL = moves.last?.1
     }
     private func search() {
         searchTask?.cancel(); systemSearch.stop(); searchGeneration = UUID()
