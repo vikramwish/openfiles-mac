@@ -9,9 +9,16 @@ enum WindowHosting {
     static func install<Content: View>(_ content: Content, in window: NSWindow) -> NSHostingView<Content> {
         let host = NSHostingView(rootView: content)
         host.sizingOptions = []
-        host.frame = window.contentView?.bounds ?? NSRect(origin: .zero, size: window.contentLayoutRect.size)
-        host.autoresizingMask = [.width, .height]
-        window.contentView = host
+        let container = NSView(frame: window.contentView?.bounds ?? NSRect(origin: .zero, size: window.contentLayoutRect.size))
+        host.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            host.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            host.topAnchor.constraint(equalTo: container.topAnchor),
+            host.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
+        window.contentView = container
         return host
     }
 }
