@@ -31,7 +31,86 @@ func checkEqual(_ lhs: Double, _ rhs: Double, accuracy: Double, file: StaticStri
 @main
 struct Runner {
     static func main() async {
+        if CommandLine.arguments.contains("--screenshots") {
+            for (name, scenario) in ScreenshotChecks.scenarios {
+                let previous = log.failures
+                do { try await scenario() } catch { failCheck(error.localizedDescription) }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(ScreenshotChecks.scenarios.count) screenshot scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--collections") {
+            for (name, scenario) in CollectionChecks.scenarios {
+                let previous = log.failures
+                do { try await scenario() } catch { failCheck(error.localizedDescription) }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(CollectionChecks.scenarios.count) collection scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--photo-similarity") {
+            for (name, scenario) in PhotoSimilarityChecks.scenarios {
+                let previous = log.failures
+                do { try await scenario() } catch { failCheck(error.localizedDescription) }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(PhotoSimilarityChecks.scenarios.count) photo similarity scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--organization") {
+            for (name, check) in OrganizationChecks.scenarios + DynamicMacChecks.scenarios {
+                let previous = log.failures
+                do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(OrganizationChecks.scenarios.count + DynamicMacChecks.scenarios.count) organization scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--photo-tools") {
+            for (name, scenario) in PhotoToolChecks.scenarios {
+                let previous = log.failures
+                do { try await scenario() } catch { failCheck(error.localizedDescription) }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(PhotoToolChecks.scenarios.count) photo tool scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--index") {
+            let scenarios = IndexChecks.scenarios + PipelineOptimizationChecks.scenarios
+            for (name, check) in scenarios {
+                let previous = log.failures
+                do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(scenarios.count) indexing scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--photoslibrary") {
+            do { try await NavigationChecks.photosLibraries() } catch { failCheck(error.localizedDescription) }
+            print("Photos library checks; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--cleanup") {
+            for (name, check) in CleanupChecks.scenarios + DeveloperCleanupChecks.scenarios + DynamicMacChecks.scenarios {
+                let previous = log.failures
+                do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(CleanupChecks.scenarios.count + DeveloperCleanupChecks.scenarios.count + DynamicMacChecks.scenarios.count) cleanup scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--versions") {
+            for (name, check) in VersionChecks.scenarios {
+                let previous = log.failures
+                do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(VersionChecks.scenarios.count) version scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
         let checks: [(String, (LibraryChecks) async throws -> Void)] = [
+            ("Natural-language search relevance and dependency exclusion", { try await $0.testGroundedNaturalLanguageSearch() }),
             ("Local search, sensitive exclusion, persistence", { try await $0.testSearchExcludesSensitiveEmbeddingsAndPersistence() }),
             ("Binary project snapshot and non-destructive restore", { try await $0.testBinaryAndProjectSnapshotsRestoreWithoutOverwriting() }),
             ("Tampered snapshot rejection", { try await $0.testTamperedSnapshotIsRejected() }),
@@ -43,6 +122,7 @@ struct Runner {
             ("Browser without connected roots or index cap", { try await $0.testBrowserWorksWithoutConnectedRootsAndHasNoIndexCap() }),
             ("Browser folder creation and symlink navigation", { try await $0.testBrowserFolderCreationAndSymlinkNavigation() }),
             ("Default discovery cannot authorize organization", { try await $0.testDefaultSearchDiscoveryDoesNotAuthorizeOrganization() }),
+            ("Per-file version history and saved changes", { try await $0.testFileHistoryAndSavedChangeStatus() }),
             ("File categories and similarity", { $0.testPureRules() })
         ]
         for (name, check) in checks {
@@ -51,8 +131,21 @@ struct Runner {
             catch { failCheck("\(name): \(error.localizedDescription)"); try? suite.tearDownWithError() }
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
         }
+        let scenarioGroups = [IndexChecks.scenarios, PipelineOptimizationChecks.scenarios, NavigationChecks.scenarios, PhotoToolChecks.scenarios, ScreenshotChecks.scenarios, PhotoSimilarityChecks.scenarios, ImageContentChecks.scenarios, OrganizationChecks.scenarios, EmbeddingGemmaChecks.scenarios, DocumentPackChecks.scenarios, CollectionChecks.scenarios, AutomaticHistoryChecks.scenarios, CleanupChecks.scenarios, RenameChecks.scenarios, DeveloperCleanupChecks.scenarios, DynamicMacChecks.scenarios, CloudPlacementChecks.scenarios]
+        for (name, check) in scenarioGroups.flatMap({ $0 }) {
+            let previous = log.failures
+            do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+            print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+        }
+        for (name, check) in VersionChecks.scenarios {
+            let previous = log.failures
+            do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+            print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+        }
         do { try await VaultChecks().testEncryptedVaultRoundTrip() } catch { failCheck("Encrypted vault: \(error.localizedDescription)") }
-        print("\(checks.count) core scenarios; \(log.failures) failures")
+do { try await EmbeddingGemmaChecks.realModelIfRequested() } catch { failCheck("EmbeddingGemma 2: \(error.localizedDescription)") }
+        let totalScenarios = checks.count + scenarioGroups.reduce(0) { $0 + $1.count } + VersionChecks.scenarios.count
+        print("\(totalScenarios) core scenarios; \(log.failures) failures")
         exit(log.failures == 0 ? 0 : 1)
     }
 }

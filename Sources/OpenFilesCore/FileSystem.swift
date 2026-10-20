@@ -26,3 +26,10 @@ public enum FileIntegrity {
 extension URL {
     var canonical: URL { resolvingSymlinksInPath().standardizedFileURL }
 }
+
+func hasExpectedCanonicalPath(_ url: URL) -> Bool {
+    let path = url.standardizedFileURL.path
+    let canonical = url.canonical.path
+    if path == canonical { return true }
+    return ((path == "/var" || path.hasPrefix("/var/")) || (path == "/tmp" || path.hasPrefix("/tmp/"))) && canonical == "/private" + path
+}

@@ -1,0 +1,6 @@
+sample-animal.jpg
+Original: Zebra at STL zoo.JPG, by Bachrach44, 640 x 480.
+Source: https://commons.wikimedia.org/wiki/File:Zebra_at_STL_zoo.JPG
+Original bytes: https://upload.wikimedia.org/wikipedia/commons/c/cf/Zebra_at_STL_zoo.JPG
+License: Released into the public domain by the author, worldwide.
+The neutral fixture filename prevents filename-based matching in the visual-content test.
