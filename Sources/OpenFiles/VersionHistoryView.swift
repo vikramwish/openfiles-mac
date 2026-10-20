@@ -49,7 +49,7 @@ struct VersionHistoryView: View {
                 Text(detail).font(.caption).foregroundStyle(.red).textSelection(.enabled)
                 Button("Refresh changes") { Task { await refresh(reset: true) } }.disabled(running)
             }
-            Text("Commits use saved contents. Restore and cherry-pick keep a recovery version. Reopen in your editor to see restored changes.")
+            Text("Versions capture changes saved in your editor. Restoring keeps a recovery version of your current work. Reopen the file in your editor to see restored changes.")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }.padding(18)
         .task(id: versionID) {
@@ -66,7 +66,7 @@ struct VersionHistoryView: View {
             if let historical {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Cherry-pick changes").font(.subheadline.weight(.semibold))
+                        Text("Restore selected changes").font(.subheadline.weight(.semibold))
                         Text(historical.message).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     }
                     Spacer()
@@ -77,8 +77,8 @@ struct VersionHistoryView: View {
             else if let review, review.changes.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "checkmark.circle").font(.largeTitle).foregroundStyle(.secondary)
-                    Text("All saved changes committed").font(.subheadline.weight(.medium))
-                    Text("Edits appear here after your editor saves them.").font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Text(historical == nil ? "All changes are in version history" : "No changes to restore").font(.subheadline.weight(.medium))
+                    Text(historical == nil ? "New edits appear here after your editor saves them." : "Choose another version to review its changes.").font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let review {
                 HStack {
@@ -89,7 +89,7 @@ struct VersionHistoryView: View {
                     }.buttonStyle(.borderless).font(.caption).disabled(locked)
                 }
                 if review.kind == .document {
-                    Text("This format is versioned as a complete document.").font(.caption).foregroundStyle(.secondary)
+                    Text("This format is saved and restored as a complete document.").font(.caption).foregroundStyle(.secondary)
                 }
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
@@ -111,10 +111,10 @@ struct VersionHistoryView: View {
                     }
                 }.frame(maxHeight: .infinity)
             } else { Spacer() }
-            TextField(historical == nil ? "Describe your changes" : "Cherry-pick message", text: $message, axis: .vertical)
-                .textFieldStyle(.roundedBorder).lineLimit(2...4).accessibilityLabel("Commit message").disabled(running)
+            TextField(historical == nil ? "Describe this version" : "Describe these restored changes", text: $message, axis: .vertical)
+                .textFieldStyle(.roundedBorder).lineLimit(2...4).accessibilityLabel(historical == nil ? "Version description" : "Restored changes description").disabled(running)
             Button(action: applySelection) {
-                Label(historical == nil ? "Commit selected changes" : "Cherry-pick selected changes", systemImage: historical == nil ? "checkmark" : "arrow.triangle.branch")
+                Label(historical == nil ? "Save version" : "Restore selected changes", systemImage: historical == nil ? "checkmark" : "arrow.uturn.backward")
                     .frame(maxWidth: .infinity)
             }.buttonStyle(.borderedProminent)
                 .disabled(locked || selection.isEmpty || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || review == nil)
@@ -128,18 +128,19 @@ struct VersionHistoryView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
                 if versions.isEmpty {
-                    Text("Your first commit starts this file’s history.").font(.caption).foregroundStyle(.secondary).padding(.vertical, 24)
+                    Text("Save a version to start this file’s history.").font(.caption).foregroundStyle(.secondary).padding(.vertical, 24)
                 }
                 ForEach(versions) { version in
                     VStack(alignment: .leading, spacing: 8) {
                         Text(version.message).font(.subheadline.weight(.medium)).textSelection(.enabled)
                         Text(version.created.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
-                        HStack {
-                            Button("Cherry-pick…") {
-                                versionID = version.id; message = "Cherry-pick: \(version.message)"; tab = 0; feedback = nil
+                        VStack(alignment: .leading, spacing: 8) {
+                            Button("Restore selected changes…") {
+                                versionID = version.id; message = "Restore changes: \(version.message)"; tab = 0; feedback = nil
                             }
-                            Spacer()
-                            Button("Restore") { restore(version) }
+                            .help("Choose which changes from this version to restore")
+                            Button("Restore entire version") { restore(version) }
+                                .help("Restore this version and keep your current work in history")
                         }.font(.caption).disabled(locked)
                     }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
@@ -175,7 +176,7 @@ struct VersionHistoryView: View {
             do {
                 if review.versionID == nil { try await model.commitChanges(review, selected: chosen, message: note) }
                 else { try await model.cherryPick(review, selected: chosen, message: note) }
-                feedback = review.versionID == nil ? "Committed: \(note)" : "Selected changes applied."
+                feedback = review.versionID == nil ? "Version saved: \(note)" : "Selected changes restored."
                 message = ""; running = false
                 if versionID != nil { versionID = nil } else { await refresh(reset: true) }
             } catch { running = false; operationError = error.localizedDescription }

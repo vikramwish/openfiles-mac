@@ -37,6 +37,11 @@ public struct FileIndexMetadata: Codable, Hashable, Sendable {
     public var detail: String
     public var retryable: Bool
     public var imageRevision: String? = nil
+    public init(stamp: FileStamp, engine: String, objectKey: String?, wordUnits: Int, inputCharacters: Int, outcome: String, detail: String, retryable: Bool, imageRevision: String? = nil) {
+        self.stamp = stamp; self.engine = engine; self.objectKey = objectKey
+        self.wordUnits = wordUnits; self.inputCharacters = inputCharacters; self.outcome = outcome
+        self.detail = detail; self.retryable = retryable; self.imageRevision = imageRevision
+    }
 }
 
 public struct IndexEvent: Codable, Identifiable, Sendable {

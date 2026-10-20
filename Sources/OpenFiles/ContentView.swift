@@ -22,6 +22,10 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 Group {
                     switch model.section {
+                    case .cleanup: CleanupView(model: model.cleanup)
+                    case .home: HomeView(packs: model.packs)
+                    case .packs: DocumentPacksView(packs: model.packs)
+                    case .protection: ProtectionView(model: model.protection, openHistory: { model.showVersionPanel(for: $0) })
                     case .files: files
                     case .cloud: CloudBrowserView(model: cloudModel)
                     case .organize: organization
@@ -95,15 +99,15 @@ struct ContentView: View {
     private var cloudFolder: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs", isDirectory: true) }
     private var sidebar: some View {
         List(selection: sidebarSelection) {
+            Section("OpenFiles") {
+                ForEach(AppModel.Section.allCases) { section in
+                    Label(section.rawValue, systemImage: section.icon).tag(section.rawValue)
+                }
+            }
             Section("Favorites") {
                 ForEach(model.locations, id: \.url) { location in
                     Label(location.name, systemImage: location.icon).tag(location.url.absoluteString)
                         .help(location.url.path)
-                }
-            }
-            Section("OpenFiles") {
-                ForEach(AppModel.Section.allCases) { section in
-                    Label(section.rawValue, systemImage: section.icon).tag(section.rawValue)
                 }
             }
             if !model.volumes.isEmpty || FileManager.default.fileExists(atPath: cloudFolder.path) {
@@ -148,10 +152,10 @@ struct ContentView: View {
     private var organization: some View { OrganizationView() }
     private var history: some View {
         VStack(alignment: .leading, spacing: 22) {
-            InfoCard(symbol: "clock.arrow.circlepath", title: "A save point for any saved format", text: "Commit a file or complete project folder from OpenFiles or its menu bar icon. Binary files are stored as full snapshots. Restore updates the file in place and automatically saves a recovery version.")
+            InfoCard(symbol: "clock.arrow.circlepath", title: "A save point for any saved format", text: "Save a version of a file or complete project folder from OpenFiles or its menu bar icon. Binary files are stored as full snapshots. Restore updates the file in place and automatically saves a recovery version.")
             if model.state.versions.isEmpty {
-                EmptyPanel(symbol: "clock.badge.checkmark", title: "Your first save point starts here", detail: "Save in your editor, then choose Commit version. Files and project folders are supported, including opaque app formats.")
-                HStack { Button("Commit file…") { model.chooseCommit() }; Button("Commit project folder…") { model.chooseCommit(project: true) } }.buttonStyle(.bordered)
+                EmptyPanel(symbol: "clock.badge.checkmark", title: "Your first save point starts here", detail: "Save in your editor, then choose Save version. Files and project folders are supported, including opaque app formats.")
+                HStack { Button("Save file version…") { model.chooseCommit() }; Button("Save folder version…") { model.chooseCommit(project: true) } }.buttonStyle(.bordered)
             } else {
                 List(model.state.versions) { version in
                     HStack(spacing: 16) {
@@ -166,7 +170,7 @@ struct ContentView: View {
                     }.padding(.vertical, 12)
                 }.listStyle(.inset).clipShape(RoundedRectangle(cornerRadius: 9))
             }
-            Text("Open a file from OpenFiles to keep a floating version panel beside its editor. Save in the editor before committing.").font(.callout).foregroundStyle(.secondary)
+            Text("Open a file from OpenFiles to keep a floating version panel beside its editor. Save in the editor before saving a version.").font(.callout).foregroundStyle(.secondary)
             Spacer(minLength: 0)
         }.padding(30).disabled(model.busy)
     }
