@@ -8,8 +8,10 @@ private let line = Color.primary.opacity(0.09)
 private let muted = Color.secondary
 private let surface = Color(nsColor: .controlBackgroundColor)
 
+@MainActor
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
+    @StateObject private var cloudModel = CloudBrowserModel()
     @ViewState private var message = ""
     var body: some View {
         HStack(spacing: 0) {
@@ -21,6 +23,7 @@ struct ContentView: View {
                 Group {
                     switch model.section {
                     case .files: files
+                    case .cloud: CloudBrowserView(model: cloudModel)
                     case .organize: organization
                     case .history: history
                     case .vault: VaultView()
@@ -28,11 +31,11 @@ struct ContentView: View {
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 Divider().opacity(0.5)
                 HStack(spacing: 8) {
-                    if model.busy || model.indexing { ProgressView().controlSize(.mini) }
+                    if model.section != .cloud && (model.busy || model.indexing) { ProgressView().controlSize(.mini) }
                     else { Image(systemName: "checkmark.circle").foregroundStyle(.secondary) }
-                    Text(model.status).lineLimit(2)
+                    Text(model.section == .cloud ? "Read-only cloud access · Save local copies when you choose" : model.status).lineLimit(2)
                     Spacer()
-                    Text(model.indexing ? "SEMANTIC INDEXING" : "ON DEVICE").font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1).foregroundStyle(.secondary)
+                    Text(model.section == .cloud ? "CLOUD STORAGE" : model.indexing ? "SEMANTIC INDEXING" : "ON DEVICE").font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1).foregroundStyle(.secondary)
                 }.font(.system(size: 11)).padding(.horizontal, 28).padding(.vertical, 12)
             }.background(Color(nsColor: .windowBackgroundColor))
         }

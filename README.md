@@ -4,7 +4,7 @@ A native macOS foundation for finding, organizing, and versioning your files. Bu
 
 ## Run
 
-Requires **macOS 14+** and **Swift 5.9+** (Xcode or Command Line Tools). No npm, API keys, backend, or third-party packages.
+Requires **macOS 14+** and **Swift 5.9+** (Xcode or Command Line Tools). No npm, backend, or third-party packages. Local features need no credentials; optional Google Drive and OneDrive connections need native OAuth app registrations.
 
 ```sh
 git clone https://github.com/yatinbayya/OpenFiles.git
@@ -15,10 +15,11 @@ make run
 `make run` compiles, assembles, ad-hoc signs, and opens `build/OpenFiles.app`. It stays available in the macOS menu bar after its window closes. Quit from the menu bar or with ⌘Q. Rebuild after changes; quit a running copy before replacing its executable. Open `Package.swift` in Xcode if you prefer its editor and debugger.
 
 ```sh
-make test       # Core behavior tests; no access to your personal folders
+make test       # Local and mocked cloud checks; no personal folders or accounts
 make build      # Build the local .app without launching
 make release    # Optimized, locally signed .app
 OPENFILES_TEST_VAULT=1 swift run --build-system native OpenFilesChecks
+swift run --build-system native OpenFilesCloudChecks  # Mocked provider checks; no accounts needed
 ```
 
 Checks use a small dependency-free executable because Command Line Tools do not ship XCTest. They return a nonzero exit code on failure. The scripts select SwiftPM's `native` build engine because the Swift 6.4 Command Line Tools on the initial development machine cannot initialize the default Swift Build engine. This option also works with Swift 5.9. No full Xcode installation is needed to run locally.
@@ -33,6 +34,12 @@ OpenFiles opens directly into your home folder. **No folder connection or import
 - Select an item and press Return to open it or Space for a Quick Look preview. Right-click for preview, enclosing-folder navigation, copy path, or commit. ⌘⇧N creates a folder; ⌘⇧. toggles hidden files.
 - macOS still enforces folder permissions. Protected folders may require approval in macOS or Full Disk Access. Spotlight excludes locations the OS or user has excluded from indexing. You can still browse accessible unindexed folders directly.
 
+## Google Drive and OneDrive
+
+Use **Cloud storage** to connect directly to Google Drive or Microsoft OneDrive, browse remote folders, and save selected files as local copies. The providers' Mac sync apps are not required. Each connection asks for read-only access; uploads, deletion, two-way sync, and remote semantic search are not implemented. Google Workspace documents open in the provider's website.
+
+You need a native OAuth app registration for each provider. Registration fields and tokens are stored in macOS Keychain. See [cloud storage setup](docs/CLOUD_STORAGE.md) for registration, permissions, account connection, and validation instructions. Remote contents are not automatically indexed, organized, or snapshotted; copies saved locally can enter the normal local indexing workflow.
+
 ## Organization, history, and vault
 
 Browsing/search access is separate from permission to rearrange files. In **Organize**, explicitly choose folders that may be organized, review the preview, then apply it. Only top-level files unchanged for 10 seconds are eligible. Automation remains off by default; enabling it applies only to those chosen organization targets, never every folder discovered by search.
@@ -46,6 +53,7 @@ Create a password-protected **Private vault**, copy a file in, and lock it. Brow
 | Area | Working now | Extension work |
 | --- | --- | --- |
 | Browsing | Direct filesystem browser, default locations/volumes, history, breadcrumbs, hidden files, path navigation, Quick Look, new folders | Rename, move/copy, Trash, multi-selection, drag/drop, sorting and view modes |
+| Cloud storage | Direct Google Drive/OneDrive sign-in, paginated remote browsing, local downloads, Keychain credentials | Uploads, sync/conflict handling, multiple accounts per provider, shared drives, Workspace exports, remote search |
 | Search | System-wide Spotlight search plus automatic local English embeddings; bounded text/PDF extraction | Chunked index, OCR, Office parsers, multilingual models, SQLite/vector index |
 | Organization | Extension rules, exact move preview, collision refusal, content verification, optional one-minute automation | Rule editor, undo journal, filesystem events, model-based classification |
 | Sensitive files | Filename/content heuristics exclude likely matches from embeddings, snapshots, and organization; encrypted APFS vault | Reviewed sensitive-file migration, richer detection, encrypted metadata |
@@ -56,14 +64,16 @@ Create a password-protected **Private vault**, copy a file in, and lock it. Brow
 
 ## Data and privacy
 
-All application state lives in `~/Library/Application Support/OpenFiles/`:
+Local library and vault state lives in `~/Library/Application Support/OpenFiles/`:
 
 - `library.json`: organization targets, file metadata, embedding vectors, and version metadata. No extracted document text is retained. This index is **not encrypted**; filenames, paths, and embeddings can reveal information.
 - `Versions/<id>/`: full copies of committed files/projects. Sensitive-content checks are heuristics, not a confidentiality guarantee. Snapshots are local history, not an off-device backup.
 - `Private.sparsebundle`: AES-256 encrypted APFS disk image, 10 GB logical capacity, allocated as needed.
 - `vault-mount/`: mount point while unlocked. Vault content is accessible to the logged-in user and their processes while mounted. Passwords are not stored, logged, or passed as process arguments; there is no password recovery.
 
-No telemetry, cloud API, or automatic model download is implemented. Browsing can visit any accessible location. Spotlight search results are not persisted. Automatic semantic indexing excludes hidden files, symbolic links, common generated directories, app data, and vault content. Semantic scans are capped at 2,000 indexed files; text extraction at 5 MB files / 12,000 characters; PDFs at 20 pages; embeddings at 4,000 characters. Native packages are treated as single projects. Sensitive detection cannot find every secret, especially in opaque binary formats.
+Optional cloud connections use the Google Drive API and Microsoft Graph. Their OAuth tokens and registration fields live in macOS Keychain; remote listings remain in memory, and downloads go to a location you choose. See [cloud data and permissions](docs/CLOUD_STORAGE.md#data-and-permissions). Disconnect removes local authorization; provider-side revocation is managed in the provider's account settings.
+
+No telemetry or automatic model download is implemented. Browsing can visit any accessible location. Spotlight search results are not persisted. Automatic semantic indexing excludes hidden files, symbolic links, common generated directories, app data, and vault content. Semantic scans are capped at 2,000 indexed files; text extraction at 5 MB files / 12,000 characters; PDFs at 20 pages; embeddings at 4,000 characters. Native packages are treated as single projects. Sensitive detection cannot find every secret, especially in opaque binary formats.
 
 This is an unsandboxed, locally signed developer app. macOS may ask for access to protected folders during browsing or automatic indexing. Distribution needs a stable signing identity, hardened runtime/notarization, and a decision about sandboxing and security-scoped bookmarks.
 
@@ -71,7 +81,8 @@ This is an unsandboxed, locally signed developer app. macOS may ask for access t
 
 - UI and application state: `Sources/OpenFiles/`
 - Search, file rules, snapshots, filesystem boundaries, vault: `Sources/OpenFilesCore/`
-- Tests: `Tests/OpenFilesChecks/`
+- Cloud provider requests, OAuth exchange, refresh, downloads: `Sources/OpenFilesCloud/`
+- Tests: `Tests/OpenFilesChecks/` and `Tests/OpenFilesCloudChecks/`
 - Build/run: `scripts/` and `Makefile`
 - Architecture and implementation sequence: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Collaboration conventions: [CONTRIBUTING.md](CONTRIBUTING.md)
