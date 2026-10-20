@@ -12,3 +12,7 @@ OpenFiles follows Apple's [macOS Human Interface Guidelines](https://developer.a
 ## Checking design changes
 
 Build with `make build`, then inspect the running workspace, narrow-window layout, sidebar selection, column sorting, toolbar enablement, Command-F, Quick Look, and sheets. Check light and dark appearances. A separate preview bundle with temporary fixture files can be used to avoid interrupting another running development session. Never run organization, restore, or vault operations on real files merely to test appearance.
+
+Workspace and standalone preview windows use `WindowHosting` with automatic hosting-view sizing disabled. The user controls the window frame; expanding details or changing preview content must not increase its minimum size. Hosted views still follow explicit window resizing. Long organization explanations scroll within a bounded region.
+
+Run `make test-window-sizing` for the native AppKit regression check. Its automatic-sizing control reproduces the growth, then it verifies stable frame/minimum size through eight content changes and checks that explicit resizing still works. The check creates no visible windows and uses no personal files.

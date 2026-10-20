@@ -95,7 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         window.minSize = NSSize(width: 980, height: 680)
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
-        window.contentView = NSHostingView(rootView: ContentView().environmentObject(model))
+        WindowHosting.install(ContentView().environmentObject(model), in: window)
         model.showWorkspace = { [weak window] in window?.makeKeyAndOrderFront(nil) }
         model.newWorkspace = model.showWorkspace
         smokeWindow = window
