@@ -202,9 +202,9 @@ final class GlobalSearchShortcut {
 final class SearchPanelController: NSObject, NSWindowDelegate {
     let store: SearchStore
     private let panel: SearchPanel
+    private let cloudModel = CloudBrowserModel()
     private let shortcut = GlobalSearchShortcut()
     private let model: AppModel
-    private let cloudModel = CloudBrowserModel()
     private var workspaces: [ObjectIdentifier: (window: NSWindow, model: AppModel)] = [:]
     private weak var lastWorkspace: NSWindow?
     var activeWorkspaceChanged: ((AppModel?) -> Void)?

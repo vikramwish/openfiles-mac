@@ -35,16 +35,17 @@ struct ContentView: View {
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 Divider()
                 HStack(spacing: 8) {
-                    if model.section != .cloud && model.busy { ProgressView().controlSize(.mini) }
-                    Text(model.section == .cloud ? "Cloud transfers and sync stay under your control" : model.status).lineLimit(2).help(model.status)
-                    Spacer(minLength: 16)
-                    if model.section != .cloud {
-                        Button { model.showingIndexing = true } label: {
-                            Label(model.indexing ? "\(model.indexProgress.processed) of \(model.indexProgress.discovered) indexed" : "Indexing Activity", systemImage: model.indexSettings.paused ? "pause.circle" : "waveform.path")
-                        }.buttonStyle(.borderless).help("View indexing progress and controls")
+                    if model.section == .cloud {
+                        if cloudModel.transferBusy { ProgressView().controlSize(.mini) }
+                        Text(cloudModel.status).lineLimit(1).help(cloudModel.status)
                     } else {
-                        Text("CLOUD STORAGE").font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1)
+                        if model.busy { ProgressView().controlSize(.mini) }
+                        Text(model.status).lineLimit(1).help(model.status)
                     }
+                    Spacer(minLength: 16)
+                    Button { model.showingIndexing = true } label: {
+                        Label(model.indexing ? "\(model.indexProgress.processed) of \(model.indexProgress.discovered) indexed" : "Indexing Activity", systemImage: model.indexSettings.paused ? "pause.circle" : "waveform.path")
+                    }.buttonStyle(.borderless).help("View indexing progress and controls")
                 }.font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.vertical, 8)
             }.background(Color(nsColor: .textBackgroundColor))
         }
