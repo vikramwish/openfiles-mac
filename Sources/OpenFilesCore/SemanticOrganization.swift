@@ -98,8 +98,8 @@ extension FileLibrary {
         }
         try Task.checkCancellation()
         guard semanticOrganizationGeneration == generation else { throw CancellationError() }
-        result.modelAvailable = prototypes.count == OrganizationTopic.defaults.count
-        guard result.modelAvailable else { semanticOrganizationPlan = result; return result }
+        // Pixel/OCR and folder evidence still work when the optional embedding model is unavailable.
+        result.modelAvailable = !prototypes.isEmpty || snapshot.contains { $0.imageContent != nil || !($0.searchTerms ?? []).isEmpty }
         var reserved = Set<String>()
         var folderProtection: [String: Bool] = [:]
         for file in snapshot.sorted(by: { $0.url.path < $1.url.path }) {
@@ -108,10 +108,11 @@ extension FileLibrary {
             func skip(_ reason: String) { result.skipped[reason, default: 0] += 1 }
             if file.sensitive || FileRules.sensitive(file.name) { skip("Potentially sensitive"); continue }
             if file.isProject { skip("App, system or project files"); continue }
-            guard let meta = file.indexMetadata, meta.engine == queryBackend.identifier,
-                  !meta.detail.hasPrefix("Filename only:"), let vector = file.vector else { skip("Content embedding not available"); continue }
+            guard let meta = file.indexMetadata,
+                  file.imageContent != nil || !meta.detail.hasPrefix("Filename only:") else { skip("Indexed content not available"); continue }
             if let reason = SemanticOrganizer.exclusion(source, roots: roots, output: output, appData: directory, excluded: state.indexSettings?.excludedFolders ?? [], folderProtection: &folderProtection) { skip(reason); continue }
-            guard let match = SemanticOrganizer.classify(vector, topics: prototypes) else { skip("Uncertain topic match"); continue }
+            let match = meta.engine == queryBackend.identifier ? file.vector.flatMap { SemanticOrganizer.classify($0, topics: prototypes) } : nil
+            guard let context = OrganizationContext.suggest(for: file, fallbackTopic: match?.topic), !context.folders.isEmpty else { skip("Uncertain context match"); continue }
             if result.suggestions.count >= max(1, limit) { result.deferred += 1; continue }
             do {
                 let values = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
@@ -121,7 +122,7 @@ extension FileLibrary {
                 try checkSnapshotEligibility(source)
                 let digest = try FileIntegrity.digest(source)
                 guard try FileStamp.read(source) == stamp else { skip("Changed during analysis"); continue }
-                let folder = output.appendingPathComponent(match.topic, isDirectory: true)
+                let folder = context.folders.reduce(output) { $0.appendingPathComponent($1, isDirectory: true) }
                 var target = folder.appendingPathComponent(file.name)
                 var suffix = 2
                 while FileManager.default.fileExists(atPath: target.path) || reserved.contains(target.path.lowercased()) {
@@ -129,7 +130,7 @@ extension FileLibrary {
                     target = folder.appendingPathComponent(source.deletingPathExtension().lastPathComponent + " (\(suffix))" + ext); suffix += 1
                 }
                 reserved.insert(target.path.lowercased())
-                result.suggestions.append(.init(id: file.id, source: source, destination: target, topic: match.topic, similarity: match.similarity, margin: match.margin, evidence: meta.detail, digest: digest, stamp: stamp))
+                result.suggestions.append(.init(id: file.id, source: source, destination: target, topic: context.topic, similarity: match?.similarity ?? 0, margin: match?.margin ?? 0, evidence: (context.reasons + ["Indexed evidence: " + meta.detail]).joined(separator: "\n"), digest: digest, stamp: stamp))
             } catch { skip("Unreadable or sensitive content") }
         }
         semanticOrganizationPlan = result
@@ -154,8 +155,13 @@ extension FileLibrary {
                 // Walk each destination component without following a substituted symbolic link.
                 let anchor = plan.destination.deletingLastPathComponent()
                 guard anchor.canonical == anchor else { throw OpenFilesError.message("Destination parent changed.") }
+                let destinationFolder = suggestion.destination.deletingLastPathComponent().standardizedFileURL
+                guard FileRules.contains(plan.destination, destinationFolder) else { throw OpenFilesError.message("Destination is outside the reviewed organization folder.") }
+                let relative = Array(destinationFolder.pathComponents.dropFirst(plan.destination.standardizedFileURL.pathComponents.count))
+                guard !relative.isEmpty, relative.count <= 6,
+                      relative.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("/") }) else { throw OpenFilesError.message("Invalid destination folders.") }
                 var parent = anchor
-                for component in [plan.destination.lastPathComponent, suggestion.topic] {
+                for component in [plan.destination.lastPathComponent] + relative {
                     parent.appendPathComponent(component, isDirectory: true)
                     if fm.fileExists(atPath: parent.path) {
                         let v = try parent.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
