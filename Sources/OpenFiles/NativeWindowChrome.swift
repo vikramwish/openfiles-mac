@@ -128,7 +128,7 @@ struct NativeWindowChrome: NSViewRepresentable {
         }
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSSearchField else { return }
-            if parent.model.section == .cloud { parent.model.section = .files }
+            if parent.model.section != .files && parent.model.section != .photos { parent.model.section = .home }
             parent.model.query = field.stringValue
         }
         @objc private func sidebar() { parent.toggleSidebar() }

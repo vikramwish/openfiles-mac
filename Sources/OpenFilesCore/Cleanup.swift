@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 
 public enum CleanupKind: String, Codable, Sendable {
-    case duplicate = "Exact duplicate", installer = "Old installer", archive = "Old downloaded archive", related = "Similar older document"
+    case screenshot = "Older screenshot", duplicate = "Exact duplicate", installer = "Old installer", archive = "Old downloaded archive", related = "Similar older document"
 }
 public struct CleanupFile: Identifiable, Sendable {
     public let id: UUID
@@ -12,6 +12,7 @@ public struct CleanupFile: Identifiable, Sendable {
     public let kind: CleanupKind
     public let evidence: String
     public let relatedURL: URL?
+    public var reviewScore: Int = 0
     fileprivate let stamp: FileStamp
     fileprivate let digest: String
 }
@@ -58,10 +59,11 @@ public struct SystemCleanupTrash: CleanupTrash {
 public actor CleanupService {
     private let appData: URL
     private let trash: any CleanupTrash
+    private let screenshotMetadata: any ScreenshotMetadataProvider
     private var review: CleanupReview?
     private var exclusions: [URL] = []
-    public init(directory: URL, trash: any CleanupTrash = SystemCleanupTrash()) {
-        appData = directory.canonical; self.trash = trash
+    public init(directory: URL, trash: any CleanupTrash = SystemCleanupTrash(), screenshotMetadata: any ScreenshotMetadataProvider = SystemScreenshotMetadata()) {
+        appData = directory.canonical; self.trash = trash; self.screenshotMetadata = screenshotMetadata
     }
     public func cancelReview() { review = nil }
     public func preview(files: [FileRecord], scope: URL, excluding protected: [URL] = [], now: Date = Date(), limit: Int = 5000) throws -> CleanupReview {
@@ -112,12 +114,36 @@ public actor CleanupService {
         let documents = safe.filter { !$0.0.sensitive && $0.0.vector != nil && ["pdf", "txt", "md", "docx", "rtf", "pages"].contains($0.0.url.pathExtension.lowercased()) }
             .sorted { $0.1.modified > $1.1.modified }.prefix(500)
         var similarityComparisons = 0
+        var screenshotsAnalyzed = 0
         for (file, stamp) in safe where !duplicatePaths.contains(file.url.path) && stamp.modified < age {
             try Task.checkCancellation()
             let ext = file.url.pathExtension.lowercased()
             let downloaded = file.url.deletingLastPathComponent().pathComponents.contains { $0.lowercased() == "downloads" }
-            var kind: CleanupKind?, evidence = "", related: URL?
-            if downloaded && ["dmg", "pkg", "iso"].contains(ext) {
+            var kind: CleanupKind?, evidence = "", related: URL?, reviewScore = 0
+            if ScreenshotReview.imageExtensions.contains(ext) {
+                let metadata = screenshotMetadata.metadata(for: file.url)
+                if let source = ScreenshotReview.source(for: file.url, metadata: metadata) {
+                    var signals = ScreenshotSignals(source: source, created: metadata.created, modified: stamp.modified, lastUsed: metadata.lastUsed, kept: !metadata.tags.isEmpty, contentTerms: file.imageContent?.textTerms)
+                    if ScreenshotReview.isOldUnkept(signals, now: now) {
+                        if signals.contentTerms == nil {
+                            guard screenshotsAnalyzed < 100 else { plan.limited = true; continue }
+                            screenshotsAnalyzed += 1
+                            signals.contentTerms = try? PhotoMediaAnalysis.terms(at: file.url)
+                        }
+                        if let terms = signals.contentTerms,
+                           let match = safe.first(where: { other in
+                               other.1.modified > stamp.modified && other.0.url != file.url &&
+                               ScreenshotReview.source(for: other.0.url, metadata: screenshotMetadata.metadata(for: other.0.url)) != nil &&
+                               ScreenshotReview.textOverlap(terms, other.0.imageContent?.textTerms ?? [])
+                           }) {
+                            signals.hasNewerRelatedCapture = true; related = match.0.url
+                        }
+                        if let assessment = ScreenshotReview.assess(signals, now: now) {
+                            kind = .screenshot; evidence = assessment.evidence; reviewScore = assessment.score
+                        }
+                    }
+                }
+            } else if downloaded && ["dmg", "pkg", "iso"].contains(ext) {
                 kind = .installer; evidence = "Installer in Downloads, last modified over 90 days ago. Check whether you still need it. Modification time does not show last use."
             } else if downloaded && ["zip", "tar", "gz", "7z", "rar"].contains(ext) {
                 kind = .archive; evidence = "Archive in Downloads, last modified over 90 days ago. Its contents may still be needed; no extraction or redundancy is assumed."
@@ -139,10 +165,13 @@ public actor CleanupService {
             guard hashedBytes + stamp.size <= hashBudget else { plan.limited = true; continue }
             hashedBytes += stamp.size
             guard let digest = try? checkedDigest(file.url, stamp: stamp, scope: scope) else { continue }
-            plan.suggestions.append(CleanupFile(id: UUID(), url: file.url, bytes: stamp.size, modified: stamp.modified, kind: kind, evidence: evidence, relatedURL: related, stamp: stamp, digest: digest))
+            plan.suggestions.append(CleanupFile(id: UUID(), url: file.url, bytes: stamp.size, modified: stamp.modified, kind: kind, evidence: evidence, relatedURL: related, reviewScore: reviewScore, stamp: stamp, digest: digest))
         }
         if similarityComparisons >= 100_000 { plan.limited = true }
-        plan.suggestions.sort { $0.bytes == $1.bytes ? $0.url.path < $1.url.path : $0.bytes > $1.bytes }
+        plan.suggestions.sort {
+            if $0.reviewScore != $1.reviewScore { return $0.reviewScore > $1.reviewScore }
+            return $0.bytes == $1.bytes ? $0.url.path < $1.url.path : $0.bytes > $1.bytes
+        }
         try Task.checkCancellation()
         review = plan
         return plan
@@ -157,6 +186,7 @@ public actor CleanupService {
         }
         // Preflight the entire selection and each retained duplicate before moving anything.
         for file in plan.files where selected.contains(file.id) {
+            try validateScreenshotUse(file)
             guard try checkedDigest(file.url, stamp: file.stamp, scope: plan.scope) == file.digest else { throw OpenFilesError.message("A selected file changed. Scan again before cleanup.") }
         }
         for group in plan.duplicates where group.files.contains(where: { selected.contains($0.id) }) {
@@ -174,6 +204,7 @@ public actor CleanupService {
             do {
                 try Task.checkCancellation()
                 // Recheck immediately before the OS Trash operation; never fall back to unlink/remove.
+                try validateScreenshotUse(file)
                 guard try checkedDigest(file.url, stamp: file.stamp, scope: plan.scope) == file.digest else { throw OpenFilesError.message("File changed after review") }
                 if let group = plan.duplicates.first(where: { $0.files.contains(where: { $0.id == file.id }) }) {
                     guard let keeper = group.files.first(where: { !selected.contains($0.id) }),
@@ -201,6 +232,13 @@ public actor CleanupService {
         let resources = try url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
         guard resources.isUbiquitousItem != true else { throw OpenFilesError.message("Cloud-synced files are excluded from cleanup") }
         return try FileStamp.read(url)
+    }
+    private func validateScreenshotUse(_ file: CleanupFile) throws {
+        guard file.kind == .screenshot else { return }
+        let metadata = screenshotMetadata.metadata(for: file.url)
+        if !metadata.tags.isEmpty || (metadata.lastUsed.map { $0 > Date().addingTimeInterval(-60 * 86400) } ?? false) {
+            throw OpenFilesError.message("This screenshot was opened recently or tagged to keep. Review it again.")
+        }
     }
     private func checkedDigest(_ url: URL, stamp: FileStamp, scope: URL) throws -> String {
         guard try safeStamp(url, scope: scope) == stamp else { throw OpenFilesError.message("File changed since review") }

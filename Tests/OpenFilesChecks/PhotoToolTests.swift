@@ -5,6 +5,7 @@ struct PhotoToolChecks {
     static let scenarios: [(String, () async throws -> Void)] = [
         ("Photo duplicates require all original, edit, and Live Photo resources to match", resources),
         ("Photo cleanup retains a checked copy and rejects unknown selections", selections),
+        ("Photo cleanup rejects changed or missing retained originals", recheck),
         ("Photo duplicate groups ignore unavailable resources and repeated asset IDs", unavailable),
         ("Selected Photos archives are inspected without changing originals or databases", archive),
         ("Photo archive inspection refuses linked original directories", linkedArchive)
@@ -26,6 +27,16 @@ struct PhotoToolChecks {
         try PhotoDuplicates.validate(["b"], in: groups)
         for selection: Set<String> in [[], ["a", "b"], ["unknown"], ["a", "unknown"]] {
             do { try PhotoDuplicates.validate(selection, in: groups); failCheck("Unsafe duplicate selection accepted") } catch {}
+        }
+    }
+    static func recheck() async throws {
+        let a = PhotoFingerprint(id: "a", resources: [resource("photo", "same")])
+        let b = PhotoFingerprint(id: "b", resources: [resource("photo", "same")])
+        let changed = PhotoFingerprint(id: "a", resources: [resource("photo", "changed")])
+        let groups = PhotoDuplicates.groups([a, b])
+        try PhotoDuplicates.validateRecheck(["b"], in: groups, current: [a, b])
+        for snapshot in [[b], [a], [changed, b]] {
+            do { try PhotoDuplicates.validateRecheck(["b"], in: groups, current: snapshot); failCheck("Changed or missing original accepted") } catch {}
         }
     }
     static func unavailable() async throws {

@@ -51,6 +51,12 @@ struct BrowserView: View {
                 Toggle(isOn: $showsPreview) { Label("Preview", systemImage: "rectangle.trailinghalf.inset.filled") }
                     .toggleStyle(.button).help("Show or hide the inline file preview").padding(.trailing, 12)
             }.background(.bar)
+            if let selected = model.selectedItem {
+                HStack {
+                    Spacer()
+                    AddToCollectionMenu(collections: model.collections, urls: [selected.url])
+                }.padding(.horizontal, 12).padding(.vertical, 6)
+            }
             Divider()
             GeometryReader { geometry in
                 if showsPreview {
@@ -112,6 +118,11 @@ struct BrowserView: View {
                     Button("Quick Look") { model.previewItem = item }
                     if !model.query.isEmpty { Button("Show Enclosing Folder") { model.open(item, reveal: true) } }
                     Divider()
+                    Menu("Add to collection") {
+                        ForEach(model.collections.collections) { collection in
+                            Button(collection.title) { model.collections.add([item.url], to: collection.id) }
+                        }
+                    }.disabled(model.collections.busy || model.collections.collections.isEmpty)
                     Button("Copy Path") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(item.url.path, forType: .string) }
                     Button("Save version…") { model.prepareCommit(item) }.disabled(item.sensitive)
                 }
@@ -126,7 +137,7 @@ struct BrowserView: View {
     }
 }
 
-private struct InlineBrowserPreview: View {
+struct InlineBrowserPreview: View {
     let item: BrowserItem?
     var body: some View {
         VStack(spacing: 0) {

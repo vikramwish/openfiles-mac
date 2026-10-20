@@ -4,6 +4,8 @@ import OpenFilesCore
 
 @MainActor
 final class CleanupModel: ObservableObject {
+    @Published var developerMode = false
+    let developer: DeveloperCleanupModel
     @Published var scope: URL?
     @Published private(set) var review: CleanupReview?
     @Published var selected = Set<UUID>()
@@ -15,6 +17,7 @@ final class CleanupModel: ObservableObject {
     private var task: Task<Void, Never>?
     init(library: FileLibrary, directory: URL) {
         self.library = library; service = CleanupService(directory: directory)
+        developer = DeveloperCleanupModel(directory: directory)
     }
     var selectedFiles: [CleanupFile] { review?.files.filter { selected.contains($0.id) } ?? [] }
     var selectedBytes: Int64 { selectedFiles.reduce(0) { $0 + $1.bytes } }
@@ -72,6 +75,16 @@ struct CleanupView: View {
         app.protection.state.locations.map(\.url) + app.packs.packs.flatMap(\.items).flatMap(\.attachments).map(\.url) + app.indexSettings.excludedFolders
     }
     var body: some View {
+        VStack(spacing: 0) {
+            Picker("Cleanup mode", selection: $model.developerMode) {
+                Text("Files & duplicates").tag(false)
+                Text("Developer space").tag(true)
+            }.pickerStyle(.segmented).frame(maxWidth: 440).padding(.top, 20).padding(.horizontal, 24)
+            if model.developerMode { DeveloperCleanupView(model: model.developer, protected: protected) }
+            else { personalReview }
+        }
+    }
+    private var personalReview: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -125,7 +138,7 @@ struct CleanupView: View {
                         Text("\(review.skipped) skipped").font(.caption).foregroundStyle(.secondary)
                     }
                     if review.limited {
-                        Label("Partial review: limited to 5,000 eligible files, 256 MB per file and 2 GB of hashing, and 100,000 similarity comparisons. Review a smaller folder for more coverage.", systemImage: "info.circle")
+                        Label("Partial review: limited to 5,000 eligible files, 256 MB per file and 2 GB of hashing, 100 screenshot content analyses, and 100,000 similarity comparisons. Review a smaller folder for more coverage.", systemImage: "info.circle")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                     Text("Nothing is selected automatically. Similarity and file age cannot tell whether a file matters to you.")
@@ -147,11 +160,17 @@ struct CleanupView: View {
                             }.padding(10)
                         }
                     }
-                    if !review.suggestions.isEmpty {
+                    if review.suggestions.contains(where: { $0.kind == .screenshot }) {
+                        Text("Older screenshots").font(.title2.weight(.semibold))
+                        Text("Ranked using age, recorded opens, recognized text, and newer related captures. Last-viewed history can be incomplete; review each image.")
+                            .font(.callout).foregroundStyle(.secondary)
+                        ForEach(review.suggestions.filter { $0.kind == .screenshot }) { file in GroupBox { fileRow(file).padding(10) } }
+                    }
+                    if review.suggestions.contains(where: { $0.kind != .screenshot }) {
                         Text("Worth a look").font(.title2.weight(.semibold))
                         Text(review.usesEmbeddings ? "Local AI compares document contents. A newer, similar document may still contain different information." : "These suggestions use file type, folder and modification time. No AI model determined that they are unwanted.")
                             .font(.callout).foregroundStyle(.secondary)
-                        ForEach(review.suggestions) { file in GroupBox { fileRow(file).padding(10) } }
+                        ForEach(review.suggestions.filter { $0.kind != .screenshot }) { file in GroupBox { fileRow(file).padding(10) } }
                     }
                     if review.files.isEmpty {
                         ContentUnavailableView("Nothing to review", systemImage: "checkmark.circle", description: Text("No eligible matches in the indexed files here. Check indexing coverage or choose another folder."))
