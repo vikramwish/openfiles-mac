@@ -119,6 +119,7 @@ struct ContentView: View {
             }
         }
         .sheet(item: $model.renameItem) { item in RenameSuggestionView(item: item).environmentObject(model) }
+        .sheet(isPresented: $model.showingAgent) { AgentPanelView().environmentObject(model) }
         .sheet(item: $model.batchRenameRequest) { request in BatchRenameView(request: request).environmentObject(model) }
     }
     private var sidebarSelection: Binding<String?> {

@@ -5,7 +5,7 @@ import Foundation
 // Keep the dependency-free Apple backend available by default. MLX is opt-in for Apple Silicon.
 let useMLX = ProcessInfo.processInfo.environment["OPENFILES_MLX"] == "1"
 var dependencies: [Package.Dependency] = []
-var appDependencies: [Target.Dependency] = ["OpenFilesCore"]
+var appDependencies: [Target.Dependency] = ["OpenFilesCore", "OpenFilesAgent"]
 var checkDependencies: [Target.Dependency] = ["OpenFilesCore"]
 var additionalTargets: [Target] = []
 if useMLX {
@@ -38,9 +38,11 @@ let package = Package(
     targets: [
         .target(name: "OpenFilesCore"),
         .target(name: "OpenFilesCloud"),
+        .target(name: "OpenFilesAgent", dependencies: ["OpenFilesCore"]),
         .executableTarget(name: "OpenFiles", dependencies: appDependencies + ["OpenFilesCloud"]),
         .executableTarget(name: "OpenFilesBenchmark", dependencies: ["OpenFilesCore"], path: "Benchmarks/OpenFilesBenchmark"),
         .executableTarget(name: "OpenFilesChecks", dependencies: checkDependencies, path: "Tests/OpenFilesChecks", resources: [.copy("Fixtures")]),
-        .executableTarget(name: "OpenFilesCloudChecks", dependencies: ["OpenFilesCloud"], path: "Tests/OpenFilesCloudChecks")
+        .executableTarget(name: "OpenFilesCloudChecks", dependencies: ["OpenFilesCloud"], path: "Tests/OpenFilesCloudChecks"),
+        .executableTarget(name: "OpenFilesAgentChecks", dependencies: ["OpenFilesAgent", "OpenFilesCore"], path: "Tests/OpenFilesAgentChecks")
     ] + additionalTargets
 )

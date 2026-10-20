@@ -148,6 +148,7 @@ struct WorkspaceCommands: Commands {
             Button("Search files…") { model.showSearch?() }.keyboardShortcut(.space, modifiers: [.command, .shift])
             Button("Browse files…") { model.section = .files; model.showWorkspace?() }
             Button("Clean up files…") { model.section = .cleanup; model.showWorkspace?() }
+            Button("Ask Hermes about files…") { model.showingAgent = true; model.showWorkspace?() }.keyboardShortcut("a", modifiers: [.command, .shift])
 
             Button("Open location…") { model.chooseFolder() }.keyboardShortcut("o", modifiers: [.command, .shift])
             Button("Go to folder…") { model.requestGo() }.keyboardShortcut("g", modifiers: [.command, .shift])
@@ -171,6 +172,7 @@ struct MenuContents: View {
         Button("Search files…   ⌘⇧Space") { model.showSearch?() }
         Button("Browse files…") { model.section = .files; show() }
         Button("Clean up files…") { model.section = .cleanup; show() }
+        Button("Ask Hermes about files…") { model.showingAgent = true; show() }
         Button("New Window") { model.newWorkspace?() }.keyboardShortcut("n", modifiers: .command)
         Divider()
         if let url = model.editingURL {

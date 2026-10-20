@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import Combine
 import OpenFilesCore
+import OpenFilesAgent
 #if canImport(OpenFilesMLX)
 import OpenFilesMLX
 #endif
@@ -67,6 +68,24 @@ final class AppModel: ObservableObject {
     @Published var newFolderName = ""
     @Published var previewItem: BrowserItem?
     @Published var renameItem: BrowserItem?
+    @Published var showingAgent = false
+    @Published var agentBusy = false
+    @Published var agentPlan: AgentPlan?
+    @Published var agentSelection = Set<UUID>()
+    @Published var agentOutcomes: [String] = []
+    @Published var agentError: String?
+    @Published var agentConnection: String?
+    @Published var agentModelOptions: [String] = []
+    @Published var agentEndpointBase: String = UserDefaults.standard.string(forKey: "agentEndpointBase") ?? "https://openrouter.ai/api/v1" {
+        didSet { UserDefaults.standard.set(agentEndpointBase, forKey: "agentEndpointBase") }
+    }
+    @Published var agentModel: String = UserDefaults.standard.string(forKey: "agentModel") ?? "z-ai/glm-5.3" {
+        didSet { UserDefaults.standard.set(agentModel, forKey: "agentModel") }
+    }
+    @Published var agentIncludeExcerpts: Bool = UserDefaults.standard.object(forKey: "agentIncludeExcerpts") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(agentIncludeExcerpts, forKey: "agentIncludeExcerpts") }
+    }
+    @Published var agentHasKey = AgentKeychain.load() != nil
     @Published var batchRenameRequest: BatchRenameRequest?
     @Published var editingURL: URL?
     @Published var syncStatus = "Loading local index"
@@ -517,6 +536,11 @@ final class AppModel: ObservableObject {
         reloadFolder()
         search()
         selectedURL = moves.last?.1
+    }
+    func refreshAfterAgentChanges(select: URL?) {
+        reloadFolder()
+        search()
+        selectedURL = select
     }
     private func search() {
         searchTask?.cancel(); systemSearch.stop(); searchGeneration = UUID()
