@@ -11,9 +11,10 @@ final class DeveloperCleanupModel: ObservableObject {
     @Published var error: String?
     @Published private(set) var result: CleanupResult?
     @Published var workloadsStopped = false
+    private let library: FileLibrary
     private let service: DeveloperCleanupService
     private var task: Task<Void, Never>?
-    init(directory: URL) { service = DeveloperCleanupService(directory: directory) }
+    init(library: FileLibrary, directory: URL) { self.library = library; service = DeveloperCleanupService(directory: directory) }
     var selectedItems: [DeveloperCleanupItem] { review?.items.filter { selected.contains($0.id) } ?? [] }
     var canTrash: Bool { !busy && workloadsStopped && !selectedItems.isEmpty && selectedItems.allSatisfy(\.canTrash) }
     func chooseFolder(excluding: [URL]) {
@@ -26,14 +27,22 @@ final class DeveloperCleanupModel: ObservableObject {
         analyze(excluding: excluding)
     }
     func analyze(excluding: [URL]) {
-        guard let scope, !busy else { return }
+        guard !busy else { return }
+        let chosen = scope
         busy = true; review = nil; result = nil; selected = []; error = nil; workloadsStopped = false
         task = Task {
             defer { busy = false }
-            do { review = try await service.preview(scope: scope, excluding: excluding) }
+            do {
+                let roots = chosen.map { [$0] } ?? MacScanScopes.reduce(MacScanScopes.defaults() + (await library.indexScopes()))
+                review = try await service.preview(scope: chosen ?? FileManager.default.homeDirectoryForCurrentUser, excluding: excluding, scopes: roots)
+            }
             catch is CancellationError { error = "Scan cancelled. No files were changed." }
             catch { self.error = error.localizedDescription }
         }
+    }
+    func useEntireMac(excluding: [URL]) { scope = nil; analyze(excluding: excluding) }
+    func prepareAutomatically(excluding: [URL]) {
+        if scope == nil && review == nil && result == nil && !busy { analyze(excluding: excluding) }
     }
     func cancel() { task?.cancel() }
     func moveToTrash(excluding: [URL]) {
@@ -67,11 +76,14 @@ struct DeveloperCleanupView: View {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            Label(model.scope?.path ?? "Choose a project, cache folder, or home folder", systemImage: "terminal")
+                            Label(model.scope?.path ?? "This Mac · developer folders and caches", systemImage: "terminal")
                                 .lineLimit(1).truncationMode(.middle).help(model.scope?.path ?? "")
                             Spacer()
-                            Button(model.scope == nil ? "Choose folder and review…" : "Change folder…") { model.chooseFolder(excluding: protected) }.disabled(model.busy)
-                            if model.scope != nil { Button("Check again") { model.analyze(excluding: protected) }.disabled(model.busy) }
+                            Menu("Scope") {
+                                Button("This Mac") { model.useEntireMac(excluding: protected) }
+                                Button("Choose a specific folder…") { model.chooseFolder(excluding: protected) }
+                            }.disabled(model.busy)
+                            Button("Check again") { model.analyze(excluding: protected) }.disabled(model.busy)
                         }
                         Text("Scans folders directly, including generated files excluded from search. No indexing pass or AI model is needed. No package commands run.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -122,6 +134,7 @@ struct DeveloperCleanupView: View {
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }.padding(30).frame(maxWidth: 1050).frame(maxWidth: .infinity)
         }
+        .task { model.prepareAutomatically(excluding: protected) }
         .sheet(isPresented: $confirming) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Move \(model.selected.count) developer items to Trash?").font(.title2.weight(.semibold))

@@ -33,7 +33,7 @@ struct CollectionsView: View {
                         ForEach(collections.collections) { collection in
                             VStack(alignment: .leading, spacing: 4) {
                                 Label(collection.title, systemImage: "rectangle.stack").lineLimit(2)
-                                Text("\(collection.files.count) references").font(.caption).foregroundStyle(.secondary)
+                                Text(collection.referenceCountLabel).font(.caption).foregroundStyle(.secondary)
                             }.padding(.vertical, 4).tag(collection.id)
                             .contextMenu {
                                 Button("Rename…") { renaming = collection }
@@ -42,7 +42,7 @@ struct CollectionsView: View {
                         }
                     }
                 }
-            }.frame(minWidth: 200, idealWidth: 230, maxWidth: 300)
+            }.frame(minWidth: 200, idealWidth: 230, maxWidth: 260)
             Group {
                 if let selected {
                     VStack(alignment: .leading, spacing: 0) {
@@ -114,7 +114,7 @@ private struct CollectionFilesView: View {
                 }
             } else {
                 HStack {
-                    Text("\(collection.files.count) references").foregroundStyle(.secondary)
+                    Text(collection.referenceCountLabel).foregroundStyle(.secondary)
                     if loading { ProgressView().controlSize(.small) }
                     Spacer()
                     Button("Refresh", systemImage: "arrow.clockwise") { refreshID = UUID() }
@@ -124,7 +124,7 @@ private struct CollectionFilesView: View {
                     }
                 }.font(.callout).padding(12)
                 GeometryReader { geometry in
-                    if geometry.size.width >= 750 {
+                    if geometry.size.width >= 680 {
                         HSplitView {
                             fileList.frame(minWidth: 320)
                             InlineBrowserPreview(item: selected).frame(minWidth: 260, idealWidth: 300)

@@ -17,7 +17,7 @@ final class CleanupModel: ObservableObject {
     private var task: Task<Void, Never>?
     init(library: FileLibrary, directory: URL) {
         self.library = library; service = CleanupService(directory: directory)
-        developer = DeveloperCleanupModel(directory: directory)
+        developer = DeveloperCleanupModel(library: library, directory: directory)
     }
     var selectedFiles: [CleanupFile] { review?.files.filter { selected.contains($0.id) } ?? [] }
     var selectedBytes: Int64 { selectedFiles.reduce(0) { $0 + $1.bytes } }
@@ -28,7 +28,7 @@ final class CleanupModel: ObservableObject {
     func chooseFolder() {
         let picker = NSOpenPanel()
         picker.title = "Choose a folder to review for cleanup"
-        picker.message = "Reviews indexed files inside this folder. No files are changed during analysis."
+        picker.message = "Optionally narrow the automatic Mac-wide review to one folder. No files change during analysis."
         picker.canChooseFiles = false; picker.canChooseDirectories = true
         picker.allowsMultipleSelection = false
         guard picker.runModal() == .OK else { return }
@@ -36,16 +36,23 @@ final class CleanupModel: ObservableObject {
         review = nil; selected = []; result = nil
     }
     func analyze(excluding: [URL]) {
-        guard let scope, !busy else { return }
+        guard !busy else { return }
+        let chosen = scope
         busy = true; error = nil; review = nil; selected = []; result = nil
         task = Task {
             defer { busy = false }
             do {
                 let current = await library.current()
-                review = try await service.preview(files: current.files, scope: scope, excluding: excluding)
+                let roots = chosen.map { [$0] } ?? MacScanScopes.reduce(MacScanScopes.defaults() + (await library.indexScopes()))
+                review = try await service.preview(files: current.files, scope: chosen ?? FileManager.default.homeDirectoryForCurrentUser, excluding: excluding, scopes: roots)
             } catch is CancellationError { error = "Review cancelled. No files were changed." }
             catch { self.error = error.localizedDescription }
         }
+    }
+    func useEntireMac(excluding: [URL]) { scope = nil; analyze(excluding: excluding) }
+    func prepareAutomatically(excluding: [URL], includeDeveloper: Bool = true) {
+        if scope == nil && review == nil && result == nil && !busy { analyze(excluding: excluding) }
+        if includeDeveloper { developer.prepareAutomatically(excluding: excluding) }
     }
     func cancel() { task?.cancel() }
     func trashSelected(excluding: [URL]) {
@@ -72,7 +79,7 @@ struct CleanupView: View {
     @ObservedObject var model: CleanupModel
     @CleanupViewState private var confirming = false
     private var protected: [URL] {
-        app.protection.state.locations.map(\.url) + app.packs.packs.flatMap(\.items).flatMap(\.attachments).map(\.url) + app.indexSettings.excludedFolders
+        app.protection.state.locations.map(\.url) + app.packs.packs.flatMap(\.items).flatMap(\.attachments).map(\.url) + app.collections.collections.flatMap(\.files) + app.indexSettings.excludedFolders
     }
     var body: some View {
         VStack(spacing: 0) {
@@ -83,6 +90,7 @@ struct CleanupView: View {
             if model.developerMode { DeveloperCleanupView(model: model.developer, protected: protected) }
             else { personalReview }
         }
+        .task { model.prepareAutomatically(excluding: protected) }
     }
     private var personalReview: some View {
         ScrollView {
@@ -95,20 +103,17 @@ struct CleanupView: View {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            Label(model.scope?.path ?? "Choose a folder to review", systemImage: "folder")
+                            Label(model.scope?.path ?? "This Mac · accessible user files and connected volumes", systemImage: "folder")
                                 .lineLimit(1).truncationMode(.middle).help(model.scope?.path ?? "")
                             Spacer()
-                            Button(model.scope == nil ? "Choose folder and review…" : "Change folder…") {
-                                let previous = model.scope
-                                model.chooseFolder()
-                                if model.scope != nil && (model.scope != previous || model.review == nil) { model.analyze(excluding: protected) }
+                            Menu("Scope") {
+                                Button("This Mac") { model.useEntireMac(excluding: protected) }
+                                Button("Choose a specific folder…") { model.chooseFolder(); model.analyze(excluding: protected) }
                             }.disabled(model.busy)
-                            if model.scope != nil {
-                                Button("Check again") { model.analyze(excluding: protected) }
-                                    .buttonStyle(.borderedProminent).disabled(model.busy)
-                            }
+                            Button("Check again") { model.analyze(excluding: protected) }
+                                .buttonStyle(.borderedProminent).disabled(model.busy)
                         }
-                        Text("Uses indexed files only. Protected locations, document-pack attachments, projects, links, sensitive-classified files and iCloud items are excluded. Other cloud folders may sync Trash changes to other devices; choose a local folder.")
+                        Text("Scans automatically across accessible user locations. Duplicate detection uses the growing file index; results may be partial while indexing continues. Protected locations, document-pack attachments, projects, links, sensitive-classified files and iCloud items are excluded. Other cloud folders may sync Trash changes to other devices; choose a local folder.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         if model.busy {
                             HStack { ProgressView().controlSize(.small); Text("Checking files…"); Spacer(); Button("Cancel") { model.cancel() } }
@@ -138,7 +143,7 @@ struct CleanupView: View {
                         Text("\(review.skipped) skipped").font(.caption).foregroundStyle(.secondary)
                     }
                     if review.limited {
-                        Label("Partial review: limited to 5,000 eligible files, 256 MB per file and 2 GB of hashing, 100 screenshot content analyses, and 100,000 similarity comparisons. Review a smaller folder for more coverage.", systemImage: "info.circle")
+                        Label("Partial review: limited to 5,000 eligible files, 256 MB per file and 2 GB of hashing, 100 screenshot content analyses, 100 suggestions, and 100,000 similarity comparisons. Review a smaller folder for more coverage.", systemImage: "info.circle")
                             .font(.callout).foregroundStyle(.secondary)
                     }
                     Text("Nothing is selected automatically. Similarity and file age cannot tell whether a file matters to you.")
@@ -173,7 +178,7 @@ struct CleanupView: View {
                         ForEach(review.suggestions.filter { $0.kind != .screenshot }) { file in GroupBox { fileRow(file).padding(10) } }
                     }
                     if review.files.isEmpty {
-                        ContentUnavailableView("Nothing to review", systemImage: "checkmark.circle", description: Text("No eligible matches in the indexed files here. Check indexing coverage or choose another folder."))
+                        ContentUnavailableView("Nothing to review", systemImage: "checkmark.circle", description: Text("No eligible matches in the indexed files yet. Results grow as macOS folder access and indexing allow; use Check again to refresh."))
                     } else {
                         HStack {
                             Text("\(model.selected.count) selected · \(bytes(model.selectedBytes))").foregroundStyle(.secondary)

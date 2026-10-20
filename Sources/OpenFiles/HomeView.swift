@@ -61,7 +61,7 @@ struct HomeView: View {
                                         VStack(alignment: .leading, spacing: 12) {
                                             Image(systemName: "rectangle.stack").font(.title2).foregroundStyle(.tint)
                                             Text(collection.title).font(.headline).lineLimit(2)
-                                            Text("\(collection.files.count) references").font(.callout).foregroundStyle(.secondary)
+                                            Text(collection.referenceCountLabel).font(.callout).foregroundStyle(.secondary)
                                         }.frame(maxWidth: .infinity, minHeight: 100, alignment: .leading).padding(16)
                                             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
                                             .contentShape(RoundedRectangle(cornerRadius: 10))

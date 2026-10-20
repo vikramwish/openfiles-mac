@@ -31,6 +31,15 @@ func checkEqual(_ lhs: Double, _ rhs: Double, accuracy: Double, file: StaticStri
 @main
 struct Runner {
     static func main() async {
+        if CommandLine.arguments.contains("--screenshots") {
+            for (name, scenario) in ScreenshotChecks.scenarios {
+                let previous = log.failures
+                do { try await scenario() } catch { failCheck(error.localizedDescription) }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(ScreenshotChecks.scenarios.count) screenshot scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
         if CommandLine.arguments.contains("--collections") {
             for (name, scenario) in CollectionChecks.scenarios {
                 let previous = log.failures
@@ -122,7 +131,7 @@ struct Runner {
             catch { failCheck("\(name): \(error.localizedDescription)"); try? suite.tearDownWithError() }
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
         }
-        for (name, check) in IndexChecks.scenarios + PipelineOptimizationChecks.scenarios + NavigationChecks.scenarios + PhotoToolChecks.scenarios + PhotoSimilarityChecks.scenarios + ImageContentChecks.scenarios + OrganizationChecks.scenarios + DocumentPackChecks.scenarios + CollectionChecks.scenarios + AutomaticHistoryChecks.scenarios + CleanupChecks.scenarios + DeveloperCleanupChecks.scenarios {
+        for (name, check) in IndexChecks.scenarios + PipelineOptimizationChecks.scenarios + NavigationChecks.scenarios + PhotoToolChecks.scenarios + ScreenshotChecks.scenarios + PhotoSimilarityChecks.scenarios + ImageContentChecks.scenarios + OrganizationChecks.scenarios + DocumentPackChecks.scenarios + CollectionChecks.scenarios + AutomaticHistoryChecks.scenarios + CleanupChecks.scenarios + DeveloperCleanupChecks.scenarios {
             let previous = log.failures
             do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
@@ -133,7 +142,9 @@ struct Runner {
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
         }
         do { try await VaultChecks().testEncryptedVaultRoundTrip() } catch { failCheck("Encrypted vault: \(error.localizedDescription)") }
-        print("\(checks.count + IndexChecks.scenarios.count + PipelineOptimizationChecks.scenarios.count + VersionChecks.scenarios.count + NavigationChecks.scenarios.count + PhotoToolChecks.scenarios.count + PhotoSimilarityChecks.scenarios.count + ImageContentChecks.scenarios.count + OrganizationChecks.scenarios.count + DocumentPackChecks.scenarios.count + CollectionChecks.scenarios.count + AutomaticHistoryChecks.scenarios.count + CleanupChecks.scenarios.count + DeveloperCleanupChecks.scenarios.count) core scenarios; \(log.failures) failures")
+        let scenarioCounts = [checks.count, IndexChecks.scenarios.count, PipelineOptimizationChecks.scenarios.count, VersionChecks.scenarios.count, NavigationChecks.scenarios.count, PhotoToolChecks.scenarios.count, ScreenshotChecks.scenarios.count, PhotoSimilarityChecks.scenarios.count, ImageContentChecks.scenarios.count, OrganizationChecks.scenarios.count, DocumentPackChecks.scenarios.count, CollectionChecks.scenarios.count, AutomaticHistoryChecks.scenarios.count, CleanupChecks.scenarios.count, DeveloperCleanupChecks.scenarios.count]
+        let totalScenarios = scenarioCounts.reduce(0, +)
+        print("\(totalScenarios) core scenarios; \(log.failures) failures")
         exit(log.failures == 0 ? 0 : 1)
     }
 }

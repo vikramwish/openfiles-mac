@@ -258,6 +258,8 @@ final class AppModel: ObservableObject {
             }
         }
         await startFileSync()
+        let cleanupExclusions = protection.state.locations.map(\.url) + packs.packs.flatMap(\.items).flatMap(\.attachments).map(\.url) + indexSettings.excludedFolders
+        cleanup.developer.prepareAutomatically(excluding: cleanupExclusions)
         if !indexSettings.paused { startIndexing() }
         pollingTask = Task { [weak self] in
             var ticks = 0
@@ -292,7 +294,11 @@ final class AppModel: ObservableObject {
         indexing = true
         indexTask = Task {
             defer { indexing = false; indexProgress = library.indexMonitor.snapshot() }
-            do { try await scan() } catch { status = "Indexing needs attention: \(error.localizedDescription)" }
+            do {
+                try await scan()
+                let exclusions = protection.state.locations.map(\.url) + packs.packs.flatMap(\.items).flatMap(\.attachments).map(\.url) + indexSettings.excludedFolders
+                cleanup.prepareAutomatically(excluding: exclusions, includeDeveloper: false)
+            } catch { status = "Indexing needs attention: \(error.localizedDescription)" }
         }
     }
     func setIndexPaused(_ paused: Bool) {
@@ -307,6 +313,7 @@ final class AppModel: ObservableObject {
     }
     func stopIndexing() { Task { await library.cancelIndexing() } }
     func finishIndexingBeforeQuit() async {
+        cleanup.cancel(); cleanup.developer.cancel()
         await protection.stop()
         fileWatcher?.stop(); pollingTask?.cancel(); indexProgressTask?.cancel(); syncTask?.cancel()
         pendingChanges = []; needsReconciliation = false

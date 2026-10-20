@@ -270,9 +270,17 @@ final class PhotoLibraryModel: ObservableObject {
             let now = Date()
             var suggestions: [String: ScreenshotAssessment] = [:], prints: [String: PhotoFingerprint] = [:], dates: [String: Date] = [:], termsByID: [String: [String]] = [:]
             var unavailable = 0, analyzed = 0
+            let byID = Dictionary(snapshot.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            var newerRelated = Set<String>()
+            for group in self.similarGroups {
+                let captures = group.photoIDs.compactMap { byID[$0] }.filter(\.isScreenshot)
+                if let latest = captures.compactMap(\.date).max() {
+                    for capture in captures where (capture.date ?? .distantFuture) < latest { newerRelated.insert(capture.id) }
+                }
+            }
             for (index, item) in snapshot.enumerated() {
                 try Task.checkCancellation()
-                guard !FileRules.sensitive(item.name) else { continue }
+                guard !ScreenshotReview.containsImportantContent([item.name]) else { continue }
                 self.status = "Reviewing older screenshots · \(index + 1) of \(snapshot.count)"
                 let source: ScreenshotSource, modified: Date, created: Date?, lastUsed: Date?, kept: Bool, asset: PHAsset?
                 if let url = item.url {
@@ -290,11 +298,7 @@ final class PhotoLibraryModel: ObservableObject {
                 do { signals.contentTerms = try await self.readScreenshotTerms(item: item, asset: asset); analyzed += 1 }
                 catch is CancellationError { throw CancellationError() }
                 catch { unavailable += 1 }
-                signals.hasNewerRelatedCapture = self.similarGroups.contains { group in
-                    group.photoIDs.contains(item.id) && snapshot.contains { other in
-                        other.isScreenshot && group.photoIDs.contains(other.id) && (other.date ?? .distantPast) > (item.date ?? .distantPast)
-                    }
-                }
+                signals.hasNewerRelatedCapture = newerRelated.contains(item.id)
                 guard let assessment = ScreenshotReview.assess(signals, now: now) else { continue }
                 if let asset {
                     do { prints[item.id] = try await self.fingerprint(asset); dates[item.id] = modified }

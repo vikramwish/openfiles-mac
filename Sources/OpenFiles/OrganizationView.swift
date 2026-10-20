@@ -11,11 +11,15 @@ final class OrganizationSession: ObservableObject {
     var analysis: Task<Void, Never>?
 }
 
+private typealias OrganizationViewState<Value> = SwiftUI.State<Value>
+
 @MainActor
 struct OrganizationView: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var session: OrganizationSession
     var automaticallyAnalyze = false
+    @OrganizationViewState private var editingFolder: UUID?
+    @OrganizationViewState private var folderPath = ""
     private var preview: OrganizationPreview? { get { session.preview } nonmutating set { session.preview = newValue } }
     private var selection: Set<UUID> { get { session.selection } nonmutating set { session.selection = newValue } }
     private var analyzing: Bool { get { session.analyzing } nonmutating set { session.analyzing = newValue } }
@@ -31,7 +35,7 @@ struct OrganizationView: View {
                 Image(systemName: "folder.badge.gearshape").font(.largeTitle).foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Organize your files").font(.title2.weight(.semibold))
-                    Text("Folder suggestions use document content, image subjects, filenames, and existing locations. Review the destination and preview each file before moving it.")
+                    Text("Folder names adapt to your files, existing project names and photo metadata. The Mac-wide scan starts automatically. Review or edit suggested folders before moving files.")
                         .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -89,7 +93,7 @@ struct OrganizationView: View {
                     Text("\(preview.suggestions.count) suggestions from \(preview.indexedFiles) files").font(.headline)
                     Text("Destination: \(preview.destination.path)").font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                     if preview.deferred > 0 {
-                        Text("\(preview.deferred) more matches are waiting. Review up to 200 suggestions per pass, then analyze again.").font(.callout).foregroundStyle(.secondary)
+                        Text("\(preview.deferred) more files are waiting. Review up to 200 suggestions per pass, then analyze again.").font(.callout).foregroundStyle(.secondary)
                     }
                     DisclosureGroup("Why some files stay in place") {
                         ScrollView {
@@ -116,6 +120,10 @@ struct OrganizationView: View {
                                             Text(suggestion.source.lastPathComponent).font(.body.weight(.medium)).foregroundStyle(.primary)
                                             Text("From: " + suggestion.source.deletingLastPathComponent().lastPathComponent).lineLimit(1).truncationMode(.middle).help(suggestion.source.path)
                                             Label(suggestion.destination.deletingLastPathComponent().path.replacingOccurrences(of: preview.destination.path + "/", with: ""), systemImage: "arrow.turn.down.right").lineLimit(1).truncationMode(.middle).help(suggestion.destination.path)
+                                            Button("Edit folder…") {
+                                                editingFolder = suggestion.id
+                                                folderPath = suggestion.destination.deletingLastPathComponent().path.replacingOccurrences(of: preview.destination.path + "/", with: "")
+                                            }.buttonStyle(.borderless).disabled(applying || analyzing)
                                             Button("Preview file…") { model.previewItem = BrowserItem(url: suggestion.source, isFolder: false, isPackage: false, size: 0, modified: .distantPast) }
                                                 .buttonStyle(.borderless).help("Preview this file without opening another app")
                                             DisclosureGroup("Why this folder?") {
@@ -129,9 +137,21 @@ struct OrganizationView: View {
                     }.listStyle(.inset)
                 }
             } else {
-                ContentUnavailableView("Organize by Content", systemImage: "square.stack.3d.up", description: Text("Find related work, study, travel, creative, home, shopping, event, and cooking files—even when they are scattered across different folders. Analysis leaves your files in place."))
+                ContentUnavailableView("Organize by Content", systemImage: "square.stack.3d.up", description: Text("Build a folder structure from the projects, names, subjects and places found in your files. No preset topic folders are required. Analysis leaves files in place."))
             }
         }.padding(24).frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+        }
+        .sheet(isPresented: Binding(get: { editingFolder != nil }, set: { if !$0 { editingFolder = nil } })) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Edit suggested folder").font(.title2.weight(.semibold))
+                Text("Enter folder names separated by /. This changes the destination for every file in this suggested folder. Files stay in place until you apply the review.").foregroundStyle(.secondary)
+                TextField("Project name / Subfolder", text: $folderPath).textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { editingFolder = nil }.keyboardShortcut(.cancelAction)
+                    Button("Update preview") { updateFolder() }.keyboardShortcut(.defaultAction)
+                }
+            }.padding(26).frame(width: 540)
         }
         .task { if automaticallyAnalyze && preview == nil && !analyzing { analyze() } }
         .onDisappear { analysis?.cancel(); analysisID = UUID(); analyzing = false }
@@ -139,6 +159,17 @@ struct OrganizationView: View {
             analysis?.cancel(); analysisID = UUID(); analyzing = false
             preview = nil; selection = []
             if automaticallyAnalyze { analyze() }
+        }
+    }
+
+    private func updateFolder() {
+        guard let preview, let editingFolder else { return }
+        let folders = folderPath.components(separatedBy: "/").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        Task {
+            do {
+                self.preview = try await model.library.reviseSemanticOrganizationFolder(planID: preview.id, suggestionID: editingFolder, folders: folders)
+                self.editingFolder = nil
+            } catch { model.error = error.localizedDescription }
         }
     }
 

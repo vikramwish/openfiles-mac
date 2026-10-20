@@ -60,11 +60,15 @@ public enum ScreenshotReview {
         if let lastUsed = signals.lastUsed, lastUsed > now.addingTimeInterval(-60 * 86400) { return false }
         return true
     }
+    public static func containsImportantContent(_ terms: [String]) -> Bool {
+        let words = Set(terms.flatMap(FileSearchQuery.words))
+        let important: Set<String> = ["receipt", "invoice", "passport", "boarding", "ticket", "tax", "insurance", "medical", "contract", "warranty", "booking", "certificate", "prescription", "payment", "licence", "license", "password", "credential", "secret", "private"]
+        return !words.isDisjoint(with: important) || FileRules.sensitive(words.sorted().joined(separator: " "))
+    }
     public static func assess(_ signals: ScreenshotSignals, now: Date = Date()) -> ScreenshotAssessment? {
         guard isOldUnkept(signals, now: now) else { return nil }
         let words = Set((signals.contentTerms ?? []).flatMap(FileSearchQuery.words))
-        let important: Set<String> = ["receipt", "invoice", "passport", "boarding", "ticket", "tax", "insurance", "medical", "contract", "warranty", "booking", "certificate", "prescription", "payment", "licence", "license"]
-        guard words.isDisjoint(with: important), !FileRules.sensitive(words.sorted().joined(separator: " ")) else { return nil }
+        guard !containsImportantContent(signals.contentTerms ?? []) else { return nil }
         // Without content analysis require six months, rather than treating an unread image as disposable.
         if signals.contentTerms == nil && (signals.created ?? now) > now.addingTimeInterval(-180 * 86400) { return nil }
         var score = signals.source == .filename ? 2 : 3

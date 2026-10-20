@@ -29,7 +29,7 @@ public struct OrganizationSuggestion: Identifiable, Sendable {
 }
 
 public struct OrganizationPreview: Identifiable, Sendable {
-    public let id: UUID
+    public var id: UUID
     public let created: Date
     public let destination: URL
     public var indexedFiles: Int
@@ -88,20 +88,21 @@ extension FileLibrary {
         let generation = UUID(); semanticOrganizationGeneration = generation
         let home = home.canonical
         let output = home.appendingPathComponent("Organized", isDirectory: true)
-        let roots = [home] + state.roots.map(\.canonical)
+        let roots = MacScanScopes.reduce([home] + indexScopes())
         let snapshot = state.files
         var result = OrganizationPreview(id: UUID(), created: Date(), destination: output, indexedFiles: snapshot.count)
-        var prototypes: [String: [Double]] = [:]
-        for topic in OrganizationTopic.defaults {
-            try Task.checkCancellation()
-            if let vector = await queryBackend.vector(for: topic.description) { prototypes[topic.id] = vector }
+        var folderProtection: [String: Bool] = [:]
+        let eligible = snapshot.filter { file in
+            !file.sensitive && !file.isProject && !FileRules.sensitive(file.name) &&
+            SemanticOrganizer.exclusion(file.url, roots: roots, output: output, appData: directory, excluded: state.indexSettings?.excludedFolders ?? [], folderProtection: &folderProtection) == nil
         }
+        let references = snapshot.filter { FileRules.contains(output, $0.url) && !$0.sensitive && !$0.isProject }
+        let contexts = OrganizationContext.suggestions(for: Array(eligible.prefix(10_000)) + references.prefix(5_000), roots: [home] + roots)
+        result.deferred = max(0, eligible.count - 10_000)
         try Task.checkCancellation()
         guard semanticOrganizationGeneration == generation else { throw CancellationError() }
-        // Pixel/OCR and folder evidence still work when the optional embedding model is unavailable.
-        result.modelAvailable = !prototypes.isEmpty || snapshot.contains { $0.imageContent != nil || !($0.searchTerms ?? []).isEmpty }
+        result.modelAvailable = !contexts.isEmpty || snapshot.contains { $0.imageContent != nil || !($0.searchTerms ?? []).isEmpty }
         var reserved = Set<String>()
-        var folderProtection: [String: Bool] = [:]
         for file in snapshot.sorted(by: { $0.url.path < $1.url.path }) {
             try Task.checkCancellation()
             let source = file.url
@@ -111,8 +112,7 @@ extension FileLibrary {
             guard let meta = file.indexMetadata,
                   file.imageContent != nil || !meta.detail.hasPrefix("Filename only:") else { skip("Indexed content not available"); continue }
             if let reason = SemanticOrganizer.exclusion(source, roots: roots, output: output, appData: directory, excluded: state.indexSettings?.excludedFolders ?? [], folderProtection: &folderProtection) { skip(reason); continue }
-            let match = meta.engine == queryBackend.identifier ? file.vector.flatMap { SemanticOrganizer.classify($0, topics: prototypes) } : nil
-            guard let context = OrganizationContext.suggest(for: file, fallbackTopic: match?.topic), !context.folders.isEmpty else { skip("Uncertain context match"); continue }
+            guard let context = contexts[file.id], !context.folders.isEmpty else { skip("Uncertain context match"); continue }
             if result.suggestions.count >= max(1, limit) { result.deferred += 1; continue }
             do {
                 let values = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
@@ -130,11 +130,35 @@ extension FileLibrary {
                     target = folder.appendingPathComponent(source.deletingPathExtension().lastPathComponent + " (\(suffix))" + ext); suffix += 1
                 }
                 reserved.insert(target.path.lowercased())
-                result.suggestions.append(.init(id: file.id, source: source, destination: target, topic: context.topic, similarity: match?.similarity ?? 0, margin: match?.margin ?? 0, evidence: (context.reasons + ["Indexed evidence: " + meta.detail]).joined(separator: "\n"), digest: digest, stamp: stamp))
+                result.suggestions.append(.init(id: file.id, source: source, destination: target, topic: context.topic, similarity: 0, margin: 0, evidence: (context.reasons + ["Indexed evidence: " + meta.detail]).joined(separator: "\n"), digest: digest, stamp: stamp))
             } catch { skip("Unreadable or sensitive content") }
         }
         semanticOrganizationPlan = result
         return result
+    }
+
+    /// Changes only the in-memory proposal. A fresh plan ID invalidates older windows.
+    public func reviseSemanticOrganizationFolder(planID: UUID, suggestionID: UUID, folders: [String]) throws -> OrganizationPreview {
+        guard var plan = semanticOrganizationPlan, plan.id == planID,
+              let original = plan.suggestions.first(where: { $0.id == suggestionID }),
+              !folders.isEmpty, folders.count <= 6,
+              folders.allSatisfy({ OrganizationContext.clean($0) == $0 && !$0.hasPrefix(".") && !$0.contains("/") && !$0.contains(":") }) else { throw OpenFilesError.message("Enter up to six folder names, separated by /. Hidden, sensitive or invalid names are not allowed.") }
+        let oldFolder = original.destination.deletingLastPathComponent()
+        let replacement = folders.reduce(plan.destination) { $0.appendingPathComponent($1, isDirectory: true) }
+        var reserved = Set(plan.suggestions.filter { $0.destination.deletingLastPathComponent() != oldFolder }.map { $0.destination.path.lowercased() })
+        plan.suggestions = plan.suggestions.map { suggestion in
+            guard suggestion.destination.deletingLastPathComponent() == oldFolder else { return suggestion }
+            var target = replacement.appendingPathComponent(suggestion.source.lastPathComponent)
+            var suffix = 2
+            while FileManager.default.fileExists(atPath: target.path) || reserved.contains(target.path.lowercased()) {
+                let ext = suggestion.source.pathExtension.isEmpty ? "" : "." + suggestion.source.pathExtension
+                target = replacement.appendingPathComponent(suggestion.source.deletingPathExtension().lastPathComponent + " (\(suffix))" + ext); suffix += 1
+            }
+            reserved.insert(target.path.lowercased())
+            return OrganizationSuggestion(id: suggestion.id, source: suggestion.source, destination: target, topic: folders.joined(separator: " / "), similarity: suggestion.similarity, margin: suggestion.margin, evidence: suggestion.evidence + "\nFolder path edited by you.", digest: suggestion.digest, stamp: suggestion.stamp)
+        }
+        plan.id = UUID(); semanticOrganizationPlan = plan
+        return plan
     }
 
     /// Only selections from the exact displayed plan can be applied; discovery grants no move authority.
@@ -149,7 +173,7 @@ extension FileLibrary {
             do {
                 let source = suggestion.source
                 var folderProtection: [String: Bool] = [:]
-                guard SemanticOrganizer.exclusion(source, roots: [plan.destination.deletingLastPathComponent()] + state.roots.map(\.canonical), output: plan.destination, appData: directory, excluded: state.indexSettings?.excludedFolders ?? [], folderProtection: &folderProtection) == nil else { throw OpenFilesError.message("Source is no longer eligible.") }
+                guard SemanticOrganizer.exclusion(source, roots: MacScanScopes.reduce([plan.destination.deletingLastPathComponent()] + indexScopes()), output: plan.destination, appData: directory, excluded: state.indexSettings?.excludedFolders ?? [], folderProtection: &folderProtection) == nil else { throw OpenFilesError.message("Source is no longer eligible.") }
                 guard try FileStamp.read(source) == suggestion.stamp, try FileIntegrity.digest(source) == suggestion.digest else { throw OpenFilesError.message("Changed since preview; skipped.") }
                 try checkSnapshotEligibility(source)
                 // Walk each destination component without following a substituted symbolic link.
