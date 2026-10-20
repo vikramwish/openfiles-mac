@@ -58,6 +58,14 @@ struct Runner {
             print("\(PhotoSimilarityChecks.scenarios.count) photo similarity scenarios; \(log.failures) failures")
             exit(log.failures == 0 ? 0 : 1)
         }
+        if CommandLine.arguments.contains("--images") {
+            for (name, scenario) in ImageContentChecks.scenarios {
+                let previous = log.failures
+                do { try await scenario() } catch { failCheck("\(name): \(error.localizedDescription)") }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            exit(log.failures == 0 ? 0 : 1)
+        }
         if CommandLine.arguments.contains("--organization") {
             for (name, check) in OrganizationChecks.scenarios + DynamicMacChecks.scenarios {
                 let previous = log.failures
@@ -142,8 +150,22 @@ struct Runner {
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
         }
         do { try await VaultChecks().testEncryptedVaultRoundTrip() } catch { failCheck("Encrypted vault: \(error.localizedDescription)") }
-        let scenarioCounts = [checks.count, IndexChecks.scenarios.count, PipelineOptimizationChecks.scenarios.count, VersionChecks.scenarios.count, NavigationChecks.scenarios.count, PhotoToolChecks.scenarios.count, ScreenshotChecks.scenarios.count, PhotoSimilarityChecks.scenarios.count, ImageContentChecks.scenarios.count, OrganizationChecks.scenarios.count, DocumentPackChecks.scenarios.count, CollectionChecks.scenarios.count, AutomaticHistoryChecks.scenarios.count, CleanupChecks.scenarios.count, DeveloperCleanupChecks.scenarios.count]
-        let totalScenarios = scenarioCounts.reduce(0, +)
+        var totalScenarios = checks.count
+        totalScenarios += IndexChecks.scenarios.count
+        totalScenarios += PipelineOptimizationChecks.scenarios.count
+        totalScenarios += VersionChecks.scenarios.count
+        totalScenarios += NavigationChecks.scenarios.count
+        totalScenarios += PhotoToolChecks.scenarios.count
+        totalScenarios += ScreenshotChecks.scenarios.count
+        totalScenarios += PhotoSimilarityChecks.scenarios.count
+        totalScenarios += ImageContentChecks.scenarios.count
+        totalScenarios += OrganizationChecks.scenarios.count
+        totalScenarios += DocumentPackChecks.scenarios.count
+        totalScenarios += CollectionChecks.scenarios.count
+        totalScenarios += AutomaticHistoryChecks.scenarios.count
+        totalScenarios += CleanupChecks.scenarios.count
+        totalScenarios += DeveloperCleanupChecks.scenarios.count
+        totalScenarios += DynamicMacChecks.scenarios.count
         print("\(totalScenarios) core scenarios; \(log.failures) failures")
         exit(log.failures == 0 ? 0 : 1)
     }

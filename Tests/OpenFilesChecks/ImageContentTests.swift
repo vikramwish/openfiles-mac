@@ -29,6 +29,9 @@ struct ImageContentChecks {
         let library = FileLibrary(directory: data, embeddingFactory: { ImageTestEmbedding() })
         _ = try await library.load(); try await library.addRoot(root)
         let cold = try await library.scan()
+        if cold.state.files.contains(where: { $0.imageContent == nil }) {
+            print("Image extraction diagnostics: " + cold.state.files.map { $0.name + ": " + ($0.indexMetadata?.detail ?? "no metadata") }.joined(separator: "; "))
+        }
         let images = library.searchCatalog.matches("images of a zebra")
         checkEqual(images.count, 1); checkEqual(images.first?.file.name, photo.lastPathComponent)
         checkEqual(images.first?.reason, "Image subject match")
