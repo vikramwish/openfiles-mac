@@ -1,6 +1,6 @@
 # OpenFiles
 
-A native macOS file search utility with a Spotlight-style search panel, local document ranking, and optional browsing, organization, and version history. Built with **SwiftUI**, Foundation, NaturalLanguage, PDFKit, and CryptoKit. Search is available over other apps with ⌘⇧Space; the native file browser is available when you need it.
+A native macOS document assistant with fast local search, reviewable document packs, automatic saved-file history, browsing, and organization. Built with **SwiftUI**, Foundation, NaturalLanguage, PDFKit, and CryptoKit. Search is available over other apps with ⌘⇧Space; the native file browser is available when you need it.
 
 ## Run
 
@@ -24,9 +24,23 @@ swift run --build-system native OpenFilesCloudChecks  # Mocked provider checks; 
 
 Checks use a small dependency-free executable because Command Line Tools do not ship XCTest. They return a nonzero exit code on failure. The scripts select SwiftPM's `native` build engine because the Swift 6.4 Command Line Tools on the initial development machine cannot initialize the default Swift Build engine. This option also works with Swift 5.9. No full Xcode installation is needed to run locally.
 
+## Home and document packs
+
+OpenFiles opens Home with three starting points: **Find something**, **Prepare documents**, and **Recover a version**. The menu bar and sidebar keep all three available.
+
+**Prepare documents** creates a local checklist from Rental application, Expense claim, Travel documents, or a custom template. Edit the title, requirements, instructions, and search words; comma-separated search words act as alternatives. Suggestions show their matching evidence and never attach files automatically. Choose files manually for sensitive or unindexed documents.
+
+Review each attached file in its preview, then choose **Mark as reviewed**. **Export copies…** creates a new folder with verified copies and a checklist that clearly lists missing required and omitted optional items. Export refuses unreviewed, missing, changed, linked, or cloud-placeholder files and cleans up a failed export. Originals stay in place. Review copies before sharing; exports include whole files without automatic redaction. Templates are editable starting points, not official requirements or checks of legal validity or expiry. Checklist metadata is local, private-permission JSON, not encrypted storage.
+
+## Automatic versions
+
+Choose **Automatic versions → Choose files or folders…** to opt important saved files or small folders into local history. Checks run every 30 seconds while OpenFiles is running, after a brief saving quiet period; unchanged contents are skipped. Use **Check now**, pause individual locations or all protection, or stop protecting a location. Stopping keeps existing versions. Open a location’s versions to review and restore earlier work.
+
+Folders are complete snapshots. Each selection is limited to 100 MB and 2,000 entries; up to 20 locations can be selected. Hidden/generated items, symbolic links, indexing exclusions, cloud placeholders, and potentially sensitive content can prevent a snapshot, with the reason shown beside the location. Automatic history keeps up to 20 automatic versions per location within a shared 1 GB payload allowance; manual versions are preserved. Storage accounting uses the captured payload. Protection captures saved bytes, runs only while the app is open, and provides local history rather than an independent backup.
+
 ## Quick search
 
-OpenFiles launches as a compact floating search panel. Press **⌘⇧Space** from any app to toggle it, or choose **Search files…** from the OpenFiles menu bar item. The shortcut uses a registered system hotkey and does not require Accessibility or Input Monitoring permissions. If another app has reserved that chord, the panel reports the conflict and menu-bar access remains available. Apple's Spotlight shortcut is unchanged.
+OpenFiles includes a compact floating search panel. Press **⌘⇧Space** from any app to toggle it, or choose **Search files…** from the OpenFiles menu bar item. The shortcut uses a registered system hotkey and does not require Accessibility or Input Monitoring permissions. If another app has reserved that chord, the panel reports the conflict and menu-bar access remains available. Apple's Spotlight shortcut is unchanged.
 
 Type a filename or a request such as `find all my australian government related files`. Results update as you type. Use **↑/↓** to select, **Return** to open, **Escape** to dismiss, and the eye button for Quick Look. Double-click also opens a result. Right-click to reveal it in the full browser; **Browse** opens the browser directly.
 
@@ -37,6 +51,12 @@ The panel shows up to 100 merged results. Its primary path uses in-memory invert
 Natural-language navigation supports type, location, relative **modification** dates, recent-first ordering, and grouping: try `PDFs in Downloads this month`, `government files grouped by folder`, or `recent images grouped by month`. Group by folder, kind, or month and select a group chip to narrow the displayed results. The bookmark button saves the query as a live smart group; relative dates are reevaluated when it is opened. Saved groups change the view, not the files.
 
 Filesystem events feed a debounced queue for create/edit/rename/delete reconciliation. Only changed files or affected directory subtrees are processed. Paused indexing queues changes; missed events, wake, launch, and a five-minute reconciliation pass catch gaps. Sync operates while OpenFiles runs, does not download cloud placeholders, and is limited to configured/discovered scopes. New default indexes are unlimited; existing user-selected limits are preserved. The panel reports indexed count and sync state.
+
+## Photo location search
+
+Use `photos taken in Sydney`, `images near Melbourne`, or `zebra photos in Sydney`. Background indexing reads embedded GPS and IPTC city, sublocation, state/province, and country names. Search uses cached place postings; it performs no geocoding requests or source-file reads. Original images are never rewritten.
+
+GPS-only named-place lookup currently covers Sydney, Melbourne, Brisbane, Perth, Adelaide, Canberra, Hobart, Darwin, Gold Coast, Newcastle, Auckland, Wellington, London, Paris, New York, San Francisco, Los Angeles, Tokyo, and Singapore. These use approximate city-centre radii (20–50 km), not administrative boundaries. Other places work when their exact names are embedded in IPTC metadata. Missing GPS/place metadata cannot be inferred from pixels, and GPS alone does not yet map countries or states. Existing image records refresh on the next indexing pass. Coordinates and place names are persisted locally in the **unencrypted** index; sensitive-classified images retain neither. Folder filters such as `photos in Pictures` retain their existing meaning. Relative dates still refer to file modification time, not EXIF capture time.
 
 ## Image-content search
 
@@ -105,6 +125,8 @@ Local library and vault state lives in `~/Library/Application Support/OpenFiles/
 - `library.json`: organization targets, file metadata, embedding vectors, and version metadata. Normalized unique search terms from bounded document prefixes are persisted for fast lookup; full extracted text is not retained. Sensitive-classified content has no stored terms or embeddings. This index is **not encrypted**; terms, filenames, paths, and embeddings can reveal information.
 - `IndexObjects/<hash>.json`: model-versioned, content-addressed vectors and word-unit/timing metadata; extracted document text is not retained. Objects remain until future cache cleanup.
 - `Versions/<id>/`: full copies of committed files/projects. Sensitive-content checks are heuristics, not a confidentiality guarantee. Snapshots are local history, not an off-device backup.
+- `DocumentPacks/<id>.json`: checklist titles, instructions, source paths, and review hashes; no document copies until explicit export. Metadata is not encrypted.
+- `automatic-history.json`: opted-in locations, pause/status data, and automatic-version retention receipts. Payloads use the existing `Versions/` storage.
 - `Private.sparsebundle`: AES-256 encrypted APFS disk image, 10 GB logical capacity, allocated as needed.
 - `vault-mount/`: mount point while unlocked. Vault content is accessible to the logged-in user and their processes while mounted. Passwords are not stored, logged, or passed as process arguments; there is no password recovery.
 
@@ -135,3 +157,12 @@ swift run --build-system native -c release OpenFilesBenchmark --search-only --co
 - Collaboration conventions: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 One teammate can own SwiftUI and workflow design while the other extends the core services. Keep the library API as the boundary, and avoid filesystem work on the main actor. CI builds and tests on macOS for pushes and pull requests.
+
+## Safe UI smoke testing
+
+After `make build`, create a disposable directory under `/private/tmp` and run the executable with `OPENFILES_UI_SMOKE_ROOT` set to that directory. `OPENFILES_UI_SMOKE_SECTION` selects `home`, `packs`, `protection`, or `history`. This mode uses only `<fixture>/app-state`, bypasses default home discovery, search registration, background indexing, and automatic protection polling. Invalid fixture paths fail closed.
+
+```sh
+mkdir -p /private/tmp/openfiles-ui-fixture
+OPENFILES_UI_SMOKE_ROOT=/private/tmp/openfiles-ui-fixture OPENFILES_UI_SMOKE_SECTION=home build/OpenFiles.app/Contents/MacOS/OpenFiles
+```
