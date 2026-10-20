@@ -19,6 +19,7 @@ struct NativeWindowChrome: NSViewRepresentable {
         context.coordinator.refresh()
         DispatchQueue.main.async { context.coordinator.refresh() }
     }
+    static func dismantleNSView(_ view: WindowAnchor, coordinator: Coordinator) { coordinator.detach() }
     final class WindowAnchor: NSView {
         var attached: ((NSWindow) -> Void)?
         override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); if let window { attached?(window) } }
@@ -30,11 +31,25 @@ struct NativeWindowChrome: NSViewRepresentable {
         private var search: NSSearchToolbarItem?
         private var toolbar: NSToolbar?
         private var lastFocusRequest = 0
-        private let titleField = NSTextField(labelWithString: "")
+        private var keyMonitor: Any?
         init(_ parent: NativeWindowChrome) { self.parent = parent }
         func install(on window: NSWindow) {
             guard self.window !== window else { return }
+            detach()
             self.window = window
+            // SwiftUI tables hosted outside a Window scene do not reliably forward onKeyPress.
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, event.window === self.window, self.parent.model.section == .files,
+                      self.parent.model.selectedItem != nil,
+                      event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
+                      !(self.window?.firstResponder is NSTextView),
+                      (!(self.window?.firstResponder is NSControl) || self.window?.firstResponder is NSTableView) else { return event }
+                switch event.keyCode {
+                case 49: self.parent.model.previewSelected(); return nil
+                case 36: self.parent.model.openSelected(); return nil
+                default: return event
+                }
+            }
             window.titleVisibility = .visible
             window.titlebarAppearsTransparent = true
             window.toolbarStyle = .unified
@@ -46,8 +61,11 @@ struct NativeWindowChrome: NSViewRepresentable {
             refresh()
             DispatchQueue.main.async { [weak self] in self?.refresh() }
         }
+        func detach() {
+            if let keyMonitor { NSEvent.removeMonitor(keyMonitor); self.keyMonitor = nil }
+        }
         func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-            ["sidebar", "back", "forward", "title", NSToolbarItem.Identifier.flexibleSpace.rawValue, "newFolder", "preview", "more", "inspector", NSToolbarItem.Identifier.flexibleSpace.rawValue, "search"].map { NSToolbarItem.Identifier($0) }
+            ["sidebar", "back", "forward", NSToolbarItem.Identifier.flexibleSpace.rawValue, "newFolder", "preview", "more", "inspector", NSToolbarItem.Identifier.flexibleSpace.rawValue, "search"].map { NSToolbarItem.Identifier($0) }
         }
         func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
         func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
@@ -65,15 +83,6 @@ struct NativeWindowChrome: NSViewRepresentable {
                 return item
             }
             let item = NSToolbarItem(itemIdentifier: identifier)
-            if identifier.rawValue == "title" {
-                titleField.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
-                titleField.lineBreakMode = .byTruncatingMiddle
-                titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-                titleField.widthAnchor.constraint(lessThanOrEqualToConstant: 200).isActive = true
-                item.view = titleField
-                item.label = "Current Location"
-                return item
-            }
             let specification: (String, String, Selector)
             switch identifier.rawValue {
             case "sidebar": specification = ("Show or Hide Sidebar", "sidebar.left", #selector(sidebar))
@@ -95,8 +104,6 @@ struct NativeWindowChrome: NSViewRepresentable {
             toolbar?.isVisible = true
             let model = parent.model
             window?.title = model.section == .files ? (model.query.isEmpty ? (model.currentFolder.path == "/" ? "This Mac" : model.currentFolder.lastPathComponent) : "Search") : model.section.rawValue
-            titleField.stringValue = window?.title ?? "OpenFiles"
-            titleField.toolTip = model.section == .files ? model.currentFolder.path : model.section.subtitle
             window?.representedURL = model.section == .files && model.query.isEmpty ? model.currentFolder : nil
             items["back"]?.isEnabled = model.section == .files && model.canGoBack
             items["forward"]?.isEnabled = model.section == .files && model.canGoForward

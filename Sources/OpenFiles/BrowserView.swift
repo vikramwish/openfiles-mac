@@ -18,7 +18,7 @@ struct BrowserToolbar: View {
                             Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                             Button(url.lastPathComponent) { model.navigate(to: url) }.help(url.path)
                         }
-                    }.buttonStyle(.link).font(.callout)
+                    }.buttonStyle(.plain).font(.callout).foregroundStyle(.secondary)
                 }
             } else {
                 Text("Search:").foregroundStyle(.secondary)

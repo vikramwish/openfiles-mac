@@ -5,7 +5,6 @@ import OpenFilesCore
 private typealias ViewState<Value> = SwiftUI.State<Value>
 
 private let line = Color.primary.opacity(0.09)
-private let muted = Color.secondary
 private let surface = Color(nsColor: .controlBackgroundColor)
 
 struct ContentView: View {
@@ -72,9 +71,12 @@ struct ContentView: View {
     }
     private var sidebarSelection: Binding<String?> {
         Binding(get: {
-            if model.section == .files,
-               let location = model.locations.first(where: { $0.url.standardizedFileURL == model.currentFolder.standardizedFileURL }) {
-                return location.url.absoluteString
+            if model.section == .files {
+                let current = model.currentFolder.standardizedFileURL
+                if model.locations.contains(where: { $0.url.standardizedFileURL == current }) ||
+                    model.volumes.contains(where: { $0.standardizedFileURL == current }) || current == cloudFolder.standardizedFileURL {
+                    return current.absoluteString
+                }
             }
             return model.section.rawValue
         }, set: { value in
