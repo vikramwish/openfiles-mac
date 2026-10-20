@@ -31,7 +31,17 @@ func checkEqual(_ lhs: Double, _ rhs: Double, accuracy: Double, file: StaticStri
 @main
 struct Runner {
     static func main() async {
+        if CommandLine.arguments.contains("--versions") {
+            for (name, check) in VersionChecks.scenarios {
+                let previous = log.failures
+                do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(VersionChecks.scenarios.count) version scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
         let checks: [(String, (LibraryChecks) async throws -> Void)] = [
+            ("Natural-language search relevance and dependency exclusion", { try await $0.testGroundedNaturalLanguageSearch() }),
             ("Local search, sensitive exclusion, persistence", { try await $0.testSearchExcludesSensitiveEmbeddingsAndPersistence() }),
             ("Binary project snapshot and non-destructive restore", { try await $0.testBinaryAndProjectSnapshotsRestoreWithoutOverwriting() }),
             ("Tampered snapshot rejection", { try await $0.testTamperedSnapshotIsRejected() }),
@@ -43,6 +53,7 @@ struct Runner {
             ("Browser without connected roots or index cap", { try await $0.testBrowserWorksWithoutConnectedRootsAndHasNoIndexCap() }),
             ("Browser folder creation and symlink navigation", { try await $0.testBrowserFolderCreationAndSymlinkNavigation() }),
             ("Default discovery cannot authorize organization", { try await $0.testDefaultSearchDiscoveryDoesNotAuthorizeOrganization() }),
+            ("Per-file version history and saved changes", { try await $0.testFileHistoryAndSavedChangeStatus() }),
             ("File categories and similarity", { $0.testPureRules() })
         ]
         for (name, check) in checks {
@@ -51,8 +62,26 @@ struct Runner {
             catch { failCheck("\(name): \(error.localizedDescription)"); try? suite.tearDownWithError() }
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
         }
+        for (name, check) in IndexChecks.scenarios + NavigationChecks.scenarios + ImageContentChecks.scenarios + OrganizationChecks.scenarios + EmbeddingGemmaChecks.scenarios {
+            let previous = log.failures
+            do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+            print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+        }
+        for (name, check) in VersionChecks.scenarios {
+            let previous = log.failures
+            do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+            print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+        }
         do { try await VaultChecks().testEncryptedVaultRoundTrip() } catch { failCheck("Encrypted vault: \(error.localizedDescription)") }
-        print("\(checks.count) core scenarios; \(log.failures) failures")
+        do { try await EmbeddingGemmaChecks.realModelIfRequested() } catch { failCheck("EmbeddingGemma 2: \(error.localizedDescription)") }
+        var scenarioCount = checks.count
+        scenarioCount += IndexChecks.scenarios.count
+        scenarioCount += NavigationChecks.scenarios.count
+        scenarioCount += ImageContentChecks.scenarios.count
+        scenarioCount += OrganizationChecks.scenarios.count
+        scenarioCount += EmbeddingGemmaChecks.scenarios.count
+        scenarioCount += VersionChecks.scenarios.count
+        print("\(scenarioCount) core scenarios; \(log.failures) failures")
         exit(log.failures == 0 ? 0 : 1)
     }
 }
