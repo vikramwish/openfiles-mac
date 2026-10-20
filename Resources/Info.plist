@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleName</key><string>OpenFiles</string>
+<key>CFBundleDisplayName</key><string>OpenFiles</string>
+<key>CFBundleIdentifier</key><string>com.openfiles.desktop</string>
+<key>CFBundleExecutable</key><string>OpenFiles</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>0.1.0</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>NSPrincipalClass</key><string>NSApplication</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSDocumentsFolderUsageDescription</key><string>Index and organize files in folders you explicitly connect.</string>
+<key>NSDownloadsFolderUsageDescription</key><string>Find and organize your downloads when you connect the Downloads folder.</string>
+<key>NSDesktopFolderUsageDescription</key><string>Find and organize your desktop files when you connect the Desktop folder.</string>
+</dict></plist>
