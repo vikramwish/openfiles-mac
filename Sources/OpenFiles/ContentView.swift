@@ -13,7 +13,7 @@ struct ContentView: View {
     @ViewState private var columns: NavigationSplitViewVisibility = .all
     @ViewState private var showsInspector = true
     @ViewState private var focusSearchRequest = 0
-    @StateObject private var cloudModel = CloudBrowserModel()
+    @ObservedObject var cloudModel: CloudBrowserModel
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
             sidebar
