@@ -32,6 +32,13 @@ public struct AgentAction: Identifiable, Sendable, Equatable {
             var isDirectory: ObjCBool = false
             guard fm.fileExists(atPath: source.path, isDirectory: &isDirectory), !isDirectory.boolValue else { return "File not found" }
             guard !FileRules.sensitive(source.lastPathComponent) else { return "Potentially sensitive" }
+            if kind == .rename, let name {
+                // Flag destination collisions up front; applyRename still re-checks them.
+                let names = (try? fm.contentsOfDirectory(atPath: source.deletingLastPathComponent().path)) ?? []
+                if names.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) {
+                    return "A file with that name already exists"
+                }
+            }
             if kind == .move {
                 guard let destination else { return "No destination folder" }
                 // Folders inside the user's scope can be created during the move; anything else is refused later.
@@ -170,5 +177,65 @@ public enum AgentPrompt {
         }
         lines.append("The user asks: \(instruction)")
         return lines.joined(separator: "\n")
+    }
+
+    public static func collectionSystemPrompt() -> String {
+        """
+        You are the OpenFiles collection assistant. The user created a collection and wants the files that belong in it. You receive the collection title and a list of candidate files found on this Mac. Choose ONLY from the candidates; never invent paths. Respond with ONLY a JSON object like {"members":[{"path":"/absolute/path.txt","reason":"short explanation"}]} listing the files that clearly belong, each with a short reason. Omit uncertain matches. No prose, no markdown fences.
+        """
+    }
+
+    public static func collectionUserPrompt(title: String, entries: [AgentFileEntry]) -> String {
+        var lines: [String] = []
+        lines.append("Collection: \(title)")
+        lines.append("Candidate files:")
+        for entry in entries.prefix(entryLimit) {
+            let kind = entry.isFolder ? "folder" : "\(entry.bytes) bytes"
+            if let excerpt = entry.excerpt, !excerpt.isEmpty {
+                let bounded = String(excerpt.prefix(excerptLimit)).replacingOccurrences(of: "\n", with: " ")
+                lines.append("\(entry.url.path) (\(kind)): \"\(bounded)\"")
+            } else {
+                lines.append("\(entry.url.path) (\(kind))")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+/// One file the model says belongs in the collection.
+public struct AgentCollectionMember: Sendable, Equatable {
+    public let url: URL
+    public let reason: String
+    public init(url: URL, reason: String) {
+        self.url = url; self.reason = reason
+    }
+}
+
+public enum AgentCollectionCodec {
+    public static let memberLimit = 30
+
+    /// Members must come from the app-supplied candidate paths; invented paths are dropped and reported.
+    public static func decode(_ data: Data, candidates: [URL]) -> (members: [AgentCollectionMember], ignored: [String]) {
+        struct DTO: Decodable {
+            struct Member: Decodable { let path: String?; let reason: String? }
+            let members: [Member]?
+        }
+        guard let dto = try? JSONDecoder().decode(DTO.self, from: data) else {
+            return ([], ["The model did not return a readable member list."])
+        }
+        let allowed = Set(candidates.map { $0.standardizedFileURL.path })
+        var members: [AgentCollectionMember] = []
+        var ignored: [String] = []
+        var seen = Set<String>()
+        for item in dto.members ?? [] {
+            guard members.count < memberLimit else { ignored.append("More than \(memberLimit) members were proposed"); break }
+            guard let raw = item.path, let url = AgentPlanCodec.validPath(raw), allowed.contains(url.standardizedFileURL.path) else {
+                ignored.append("Ignored a path that was not among the candidates.")
+                continue
+            }
+            guard seen.insert(url.standardizedFileURL.path).inserted else { continue }
+            members.append(AgentCollectionMember(url: url, reason: String((item.reason ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))))
+        }
+        return (members, ignored)
     }
 }

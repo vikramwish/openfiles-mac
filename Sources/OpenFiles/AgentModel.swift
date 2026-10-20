@@ -26,6 +26,79 @@ extension AppModel {
         action.availability(home: FileManager.default.homeDirectoryForCurrentUser, roots: state.roots)
     }
 
+    /// Adds bounded text excerpts to the visible-file entries; originals never leave the Mac.
+    private func entriesWithPreviews(_ base: [AgentFileEntry]) async -> [AgentFileEntry] {
+        guard agentIncludeExcerpts else { return base }
+        var entries = base
+        let candidates = entries
+            .filter { !$0.isFolder && $0.bytes <= 64 * 1024 && FileRules.textExtensions.contains($0.url.pathExtension.lowercased()) }
+            .prefix(20).map(\.url)
+        let excerpts = await Task.detached(priority: .utility) { () -> [URL: String] in
+            var result: [URL: String] = [:]
+            for url in candidates {
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                let excerpt = String(text.prefix(AgentPrompt.excerptLimit))
+                if !FileRules.sensitive(excerpt) { result[url] = excerpt }
+            }
+            return result
+        }.value
+        entries = entries.map { entry in
+            guard let excerpt = excerpts[entry.url] else { return entry }
+            return AgentFileEntry(url: entry.url, isFolder: entry.isFolder, bytes: entry.bytes, excerpt: excerpt)
+        }
+        return entries
+    }
+
+    // MARK: - Collection suggestions
+
+    /// Ranks indexed files against the collection title locally, then optionally lets the model refine the
+    /// pick with reasons. Every suggestion is reviewed before a single reference is added.
+    func suggestCollectionMembers(_ collection: FileCollection) async {
+        collectionSuggesting = true; collectionSuggestionError = nil; collectionSuggestions = nil
+        defer { collectionSuggesting = false }
+        let matches = await library.searchMatches(collection.title)
+        let existing = Set(collection.files.map { $0.standardizedFileURL.path })
+        var candidates: [URL] = []
+        var reasons: [URL: String] = [:]
+        var sizes: [URL: Int64] = [:]
+        for match in matches.prefix(24) where !match.file.sensitive && !FileRules.sensitive(match.file.name) {
+            let url = match.file.url.standardizedFileURL
+            guard !existing.contains(url.path), !candidates.contains(url) else { continue }
+            candidates.append(url)
+            reasons[url] = match.reason
+            sizes[url] = match.file.size
+        }
+        guard !candidates.isEmpty else {
+            collectionSuggestionError = "No related indexed files were found for “\(collection.title)”. Update the index in Organize, then try again."
+            return
+        }
+        if let client = agentClient {
+            let entries = await entriesWithPreviews(candidates.map { AgentFileEntry(url: $0, bytes: sizes[$0] ?? 0, excerpt: nil) })
+            do {
+                let content = try await client.chat(model: agentModel, system: AgentPrompt.collectionSystemPrompt(),
+                                                     parts: [.text(AgentPrompt.collectionUserPrompt(title: collection.title, entries: entries))])
+                if let data = AgentPlanCodec.extractJSON(in: content) {
+                    let decoded = AgentCollectionCodec.decode(data, candidates: candidates)
+                    if !decoded.members.isEmpty {
+                        collectionSuggestions = CollectionSuggestionSet(collection: collection, members: decoded.members, ignored: decoded.ignored, refinedByModel: true)
+                        return
+                    }
+                }
+            } catch { /* fall through to the app's own local ranking below */ }
+        }
+        // Local fallback: the app's semantic index already ranks the candidates with reasons.
+        let members = candidates.prefix(12).map { url in
+            AgentCollectionMember(url: url, reason: reasons[url].map { "Indexed match · \($0)" } ?? "Indexed match")
+        }
+        collectionSuggestions = CollectionSuggestionSet(collection: collection, members: Array(members), ignored: [], refinedByModel: false)
+    }
+
+    func applyCollectionSuggestions(_ urls: [URL]) {
+        guard let suggestion = collectionSuggestions else { return }
+        collections.add(urls, to: suggestion.collection.id)
+        collectionSuggestions = nil
+    }
+
     func requestAgentPlan(_ instruction: String) async {
         let instruction = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !instruction.isEmpty else { return }
@@ -35,25 +108,7 @@ extension AppModel {
         }
         agentBusy = true; agentError = nil; agentOutcomes = []; agentPlan = nil; agentSelection = []
         defer { agentBusy = false }
-        var entries = agentEntries()
-        if agentIncludeExcerpts {
-            let candidates = entries
-                .filter { !$0.isFolder && $0.bytes <= 64 * 1024 && FileRules.textExtensions.contains($0.url.pathExtension.lowercased()) }
-                .prefix(20).map(\.url)
-            let excerpts = await Task.detached(priority: .utility) { () -> [URL: String] in
-                var result: [URL: String] = [:]
-                for url in candidates {
-                    guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
-                    let excerpt = String(text.prefix(AgentPrompt.excerptLimit))
-                    if !FileRules.sensitive(excerpt) { result[url] = excerpt }
-                }
-                return result
-            }.value
-            entries = entries.map { entry in
-                guard let excerpt = excerpts[entry.url] else { return entry }
-                return AgentFileEntry(url: entry.url, isFolder: entry.isFolder, bytes: entry.bytes, excerpt: excerpt)
-            }
-        }
+        let entries = await entriesWithPreviews(agentEntries())
         var parts: [AgentContentPart] = []
         if agentIncludeExcerpts {
             // Downscaled previews of up to 4 image files let the model rename screenshots from what they show.
@@ -101,8 +156,10 @@ extension AppModel {
             case .rename:
                 guard let source = action.source, let name = action.name else { continue }
                 do {
-                    // The preview re-reads and re-verifies the file; applyRename re-checks stamp, digest and collisions.
-                    let preview = try await library.previewRename(source)
+                    // Agent renames do not re-extract content: the reviewed name needs only verification.
+                    // previewAgentRename skips the suggestion-only caps; applyRename still re-checks stamp,
+                    // digest and collisions, and copies before removing the original.
+                    let preview = try await library.previewAgentRename(source)
                     let result = try await library.applyRename(previewID: preview.id, name: name)
                     if let warning = result.indexWarning { outcomes.append(warning) }
                     outcomes.append("Renamed \(source.lastPathComponent) to \(result.destination.lastPathComponent)")

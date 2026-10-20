@@ -52,6 +52,12 @@ struct CollectionsView: View {
                                 Text("References only · originals stay in their folders").font(.callout).foregroundStyle(.secondary)
                             }
                             Spacer()
+                            Button {
+                                Task { await model.suggestCollectionMembers(selected) }
+                            } label: {
+                                if model.collectionSuggesting { ProgressView().controlSize(.small) }
+                                else { Label("Suggest files…", systemImage: "sparkles") }
+                            }.disabled(collections.busy || model.collectionSuggesting).help("Find files that belong here using your index and the configured model")
                             Button("Add files…", systemImage: "plus") { collections.chooseFiles(for: selected.id) }.disabled(collections.busy)
                             Menu {
                                 Button("Rename…") { renaming = selected }
@@ -70,8 +76,14 @@ struct CollectionsView: View {
             CollectionNameSheet(heading: "New collection") { title in
                 guard let id = await collections.create(title) else { return false }
                 model.selectedCollectionID = id
+                if let created = collections.collections.first(where: { $0.id == id }) {
+                    Task { await model.suggestCollectionMembers(created) }
+                }
                 return true
             }
+        }
+        .sheet(isPresented: Binding(get: { model.collectionSuggestions != nil }, set: { if !$0 { model.collectionSuggestions = nil } })) {
+            CollectionSuggestionsView().environmentObject(model)
         }
         .sheet(item: $renaming) { collection in
             CollectionNameSheet(heading: "Rename collection", name: collection.title) { title in
@@ -109,6 +121,15 @@ private struct CollectionFilesView: View {
                 } description: {
                     Text("Choose files from different folders, or find a file on Home and use Add to collection.")
                 } actions: {
+                    Button {
+                        Task { await model.suggestCollectionMembers(collection) }
+                    } label: {
+                        if model.collectionSuggesting {
+                            HStack { ProgressView().controlSize(.small); Text("Finding suggestions…") }
+                        } else {
+                            Label("Suggest files…", systemImage: "sparkles")
+                        }
+                    }.disabled(model.collectionSuggesting)
                     Button("Add files…") { collections.chooseFiles(for: collection.id) }.disabled(collections.busy)
                     Button("Find files") { model.query = ""; model.section = .home }
                 }

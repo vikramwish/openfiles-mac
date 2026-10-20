@@ -301,4 +301,77 @@ enum AgentChecks {
         try expect(decoded.count < original.count, "preview is smaller than the original")
         try expect(decoded.count < 400_000, "preview stays bounded")
     }
+
+    static func collectionCodecAcceptsOnlyCandidates() async throws {
+        let prompt = AgentPrompt.collectionUserPrompt(title: "Kyoto trip", entries: [
+            AgentFileEntry(url: URL(fileURLWithPath: "/tmp/OpenFilesAgent/kyoto-notes.txt"), bytes: 131, excerpt: "Kyoto travel plan"),
+            AgentFileEntry(url: URL(fileURLWithPath: "/tmp/OpenFilesAgent/budget.txt"), bytes: 134)
+        ])
+        try expect(prompt.contains("Collection: Kyoto trip"), "prompt names the collection")
+        try expect(prompt.contains("/tmp/OpenFilesAgent/kyoto-notes.txt (131 bytes): \"Kyoto travel plan\""), "excerpts ride along with candidates")
+        try expect(prompt.contains("/tmp/OpenFilesAgent/budget.txt (134 bytes)"), "all candidates listed")
+
+        let candidates = [URL(fileURLWithPath: "/tmp/OpenFilesAgent/kyoto-notes.txt"),
+                          URL(fileURLWithPath: "/tmp/OpenFilesAgent/budget.txt")]
+        let json = """
+        {"members":[
+          {"path":"/tmp/OpenFilesAgent/kyoto-notes.txt","reason":"Kyoto planning notes"},
+          {"path":"/tmp/OpenFilesAgent/invented.txt","reason":"not a candidate"},
+          {"path":"/tmp/OpenFilesAgent/kyoto-notes.txt","reason":"duplicate"},
+          {"path":"/tmp/OpenFilesAgent/budget.txt","reason":"trip budget"}
+        ]}
+        """
+        let decoded = AgentCollectionCodec.decode(Data(json.utf8), candidates: candidates)
+        try expect(decoded.members.count == 2, "only supplied candidates survive, got \(decoded.members.count)")
+        try expect(decoded.members.allSatisfy { candidates.contains($0.url) }, "no invented paths")
+        try expect(decoded.members.first?.reason == "Kyoto planning notes", "reasons are kept")
+        try expect(decoded.ignored.contains { $0.contains("not among the candidates") }, "invented path reported")
+        var many: [[String: String]] = []
+        for index in 0..<40 { many.append(["path": "/tmp/OpenFilesAgent/kyoto-notes.txt", "reason": "r\(index)"]) }
+        // Different reasons would pass the dedupe only by path; all identical paths collapse to one member.
+        let collapsed = AgentCollectionCodec.decode(Data(try JSONSerialization.data(withJSONObject: ["members": many])), candidates: candidates)
+        try expect(collapsed.members.count == 1, "duplicates collapse")
+    }
+
+    static func agentRenameVerifiesLargeFiles() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("OpenFilesAgentBigRename-\(UUID())").resolvingSymlinksInPath()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let files = base.appendingPathComponent("Files")
+        try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
+        let library = FileLibrary(directory: base.appendingPathComponent("Data"), embeddingFactory: { StubBackend() })
+        _ = try await library.load()
+        try await library.addRoot(files)
+
+        // A file past the 5 MB suggestion cap still renames through the verified agent path.
+        let big = files.appendingPathComponent("Screenshot large.png")
+        let payload = Data(count: 6 * 1024 * 1024)
+        try payload.write(to: big)
+        let preview = try await library.previewAgentRename(big)
+        try expect(preview.suggestions.isEmpty, "agent previews carry no ranked suggestions")
+        let result = try await library.applyRename(previewID: preview.id, name: "Descriptive screenshot.png")
+        try expect(result.destination.lastPathComponent == "Descriptive screenshot.png", "renamed to the reviewed name")
+        try expect(!FileManager.default.fileExists(atPath: big.path), "original removed after the verified copy")
+        try expect((try? Data(contentsOf: result.destination))?.count == payload.count, "bytes preserved")
+
+        // Sensitive names are still refused.
+        let sensitive = files.appendingPathComponent("passwords.txt")
+        try "credentials".write(to: sensitive, atomically: true, encoding: .utf8)
+        try await expectError({ _ = try await library.previewAgentRename(sensitive) }) { error in
+            error.localizedDescription.contains("sensitive")
+        }
+    }
+
+    static func renameAvailabilityFlagsCollisions() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("OpenFilesAgentCollision-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let files = base.appendingPathComponent("Files")
+        try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
+        try "keep".write(to: files.appendingPathComponent("existing name.txt"), atomically: true, encoding: .utf8)
+        try "source".write(to: files.appendingPathComponent("source.txt"), atomically: true, encoding: .utf8)
+        let action = AgentAction(kind: .rename, source: files.appendingPathComponent("source.txt"), name: "Existing Name.TXT")
+        try expect(action.availability(home: base, roots: [files]) == "A file with that name already exists",
+                  "collisions are flagged case-insensitively before approval")
+        let clear = AgentAction(kind: .rename, source: files.appendingPathComponent("source.txt"), name: "Fresh name.txt")
+        try expect(clear.availability(home: base, roots: [files]) == nil, "clear names stay available")
+    }
 }

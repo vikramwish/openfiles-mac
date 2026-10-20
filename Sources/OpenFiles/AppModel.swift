@@ -86,6 +86,9 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(agentIncludeExcerpts, forKey: "agentIncludeExcerpts") }
     }
     @Published var agentHasKey = AgentKeychain.load() != nil
+    @Published var collectionSuggestions: CollectionSuggestionSet?
+    @Published var collectionSuggesting = false
+    @Published var collectionSuggestionError: String?
     @Published var batchRenameRequest: BatchRenameRequest?
     @Published var editingURL: URL?
     @Published var syncStatus = "Loading local index"

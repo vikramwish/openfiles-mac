@@ -6,11 +6,15 @@ Open **Ask Hermes…** in the browser toolbar, or choose **Ask Hermes about file
 
 ## What the agent can propose
 
-- **Renames** — better filenames for the files you see. Applied through the reviewed rename flow: the file is re-read, the suggested name is validated (same extension, no path tricks, no sensitive files), copies are verified byte-for-byte, and the original is removed only after the replacement is confirmed.
+- **Renames** — better filenames for the files you see. The suggested name is validated (same extension, no path tricks, no sensitive files); agent renames verify the file by stamp and digest without re-reading its content, so large screenshots are not limited by the 5 MB suggestion cap, and the original is removed only after the verified copy is confirmed.
 - **Moves** — move a file into a destination folder. The preview refuses sensitive files, symbolic links, files outside your personal folders, protected/system locations and destinations outside your scope; applying re-verifies stamps and digests, never replaces an existing file (a suffixed copy is proposed instead), and removes the original only after the copy is verified.
 - **Navigation** — open a folder in the browser so you can inspect what the agent found.
 
 The agent cannot invent paths, touch files outside your personal folders, act on sensitive files, or apply anything on its own. Unknown action kinds are refused and reported, and plans are capped at 12 actions.
+
+## Collections
+
+New collections suggest their own members. Creating a collection — or choosing **Suggest files…** in an existing one — ranks your indexed files against the collection title locally; when a model service is configured, the model then refines the pick with reasons, choosing only from the candidates the app found (invented paths are refused and reported). Review the suggestions and approve each reference. Collections are metadata only, so files never move, and references are added only for the rows you approve.
 
 ## Model service
 
