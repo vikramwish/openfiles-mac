@@ -2,6 +2,8 @@
 
 Use macOS 14+ and Swift 5.9+. Clone, then run `make test` and `make run`. There are no secrets or dependencies to configure.
 
+For the optional EmbeddingGemma 2 backend, use an Apple Silicon Mac with full Xcode and Swift 6.3+, then `OPENFILES_MLX=1 make test` and `OPENFILES_MLX=1 make run`. This build adds pinned MLX/tokenizer dependencies. See [docs/EMBEDDINGGEMMA.md](docs/EMBEDDINGGEMMA.md) for local checkpoint selection and the opt-in real-model test. Tests must keep model-required checks visibly separate from checks using injected backends.
+
 Create a short-lived branch (`codex/<topic>` for agent changes, or your team's chosen prefix), make a focused change, and open a PR to `main`. Include the resulting behavior, any data migration, and how it was verified. CI runs core tests and builds the app on macOS.
 
 ## Boundaries

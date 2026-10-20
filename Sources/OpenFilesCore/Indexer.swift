@@ -80,6 +80,7 @@ private actor IndexWorker {
             if object.vector == nil { result.skipReason = "Model unavailable" }
             result.event.outcome = outcome
             result.event.detail = object.vector == nil ? "Model returned no vector; filename/content search remains available and a later pass can retry" : cached ? "Content-addressed object reused; no tokenization or inference" : text.detail
+            if object.vector == nil, let reason = await backend.failureReason() { result.event.detail = reason }
         } catch is CancellationError { result.skipReason = "Cancelled"; result.event.outcome = "Cancelled"; result.event.detail = "Unfinished file will be retried" }
         catch { result.skipReason = "Changed or unreadable file"; result.event.outcome = "Skipped"; result.event.detail = error.localizedDescription }
         return result
@@ -95,7 +96,7 @@ enum IndexPipeline {
         let actualWorkers = ProcessInfo.processInfo.isLowPowerModeEnabled ? 1 : workerCount
         let backends = (0..<actualWorkers).map { _ in factory() }
         let engine = backends[0].identifier
-        var progress = IndexProgress(); progress.started = Date(); progress.phase = .discovering; progress.engineID = engine; progress.workers = actualWorkers; progress.limit = settings.maxFiles
+        var progress = IndexProgress(); progress.started = Date(); progress.phase = .discovering; progress.engineID = engine; progress.engine = backends[0].displayName; progress.workers = actualWorkers; progress.limit = settings.maxFiles
         var candidates: [Candidate] = [], visited = Set<String>(), seen = Set<String>()
         let old = Dictionary(prior.map { ($0.url.standardizedFileURL.path, $0) }, uniquingKeysWith: { first, _ in first })
         var records: [FileRecord] = [], pending: [FileRecord] = []

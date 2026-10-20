@@ -1,6 +1,9 @@
 import SwiftUI
 import AppKit
 import OpenFilesCore
+#if canImport(OpenFilesMLX)
+import OpenFilesMLX
+#endif
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -12,6 +15,17 @@ final class AppModel: ObservableObject {
     @Published var status = "Your files. A little more findable."
     @Published var error: String?
     @Published var embeddingsAvailable = false
+    @Published var usesEmbeddingGemma = false
+    @Published var loadingEmbeddingModel = false
+    @Published var embeddingModelNotice: String?
+    private static let modelDirectoryKey = "embeddingGemma2Directory"
+    var supportsEmbeddingGemma: Bool {
+        #if canImport(OpenFilesMLX)
+        return true
+        #else
+        return false
+        #endif
+    }
     @Published var commitTarget: URL?
     @Published var showingCommit = false
     @Published var section: Section = .files
@@ -135,6 +149,12 @@ final class AppModel: ObservableObject {
         navigate(to: currentFolder)
         await perform {
             self.state = try await self.library.load()
+            #if canImport(OpenFilesMLX)
+            if let path = UserDefaults.standard.string(forKey: Self.modelDirectoryKey) {
+                do { try await self.activateEmbeddingGemma(URL(fileURLWithPath: path)) }
+                catch { self.embeddingModelNotice = "EmbeddingGemma could not load. Using Apple search: \(error.localizedDescription)" }
+            }
+            #endif
             await self.library.enableDefaultDiscovery(home: FileManager.default.homeDirectoryForCurrentUser)
             self.vaultState = await self.vault.status()
             self.indexSettings = self.state.indexSettings ?? IndexSettings()
@@ -153,7 +173,7 @@ final class AppModel: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
                 guard let self else { return }
-                if self.state.autoOrganize && !self.busy && !self.indexing && !self.indexSettings.paused {
+                if self.state.autoOrganize && !self.busy && !self.indexing && !self.loadingEmbeddingModel && !self.indexSettings.paused {
                     await self.perform {
                         try await self.scan()
                         _ = try await self.library.previewOrganization()
@@ -173,6 +193,7 @@ final class AppModel: ObservableObject {
         do { try await action() } catch { self.error = error.localizedDescription }
     }
     func scan() async throws {
+        guard !loadingEmbeddingModel else { throw OpenFilesError.message("Wait for the search model to finish loading.") }
         indexing = true
         defer { indexing = false; indexProgress = library.indexMonitor.snapshot() }
         let report = try await library.scan()
@@ -181,7 +202,7 @@ final class AppModel: ObservableObject {
         status = "\(state.files.count) files in semantic catalog · \(report.progress.reused) reused · \(report.progress.embedded) newly embedded" + (report.progress.limitReached ? " · semantic limit reached" : "")
     }
     func startIndexing() {
-        guard !indexing, !indexSettings.paused else { return }
+        guard !indexing, !loadingEmbeddingModel, !indexSettings.paused else { return }
         indexing = true
         indexTask = Task {
             defer { indexing = false; indexProgress = library.indexMonitor.snapshot() }
@@ -210,6 +231,50 @@ final class AppModel: ObservableObject {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         var settings = indexSettings
         if !settings.excludedFolders.contains(url) { settings.excludedFolders.append(url); updateIndexSettings(settings) }
+    }
+    func chooseEmbeddingGemma() {
+        #if canImport(OpenFilesMLX)
+        guard !indexing, !busy, !loadingEmbeddingModel else { return }
+        let panel = NSOpenPanel()
+        panel.title = "Choose EmbeddingGemma 2 model"
+        panel.message = "Choose a downloaded checkpoint folder. Search runs on this Mac; the model receives bounded document text and search queries. Changing models rebuilds the semantic index."
+        panel.canChooseDirectories = true; panel.canChooseFiles = false
+        guard panel.runModal() == .OK, let directory = panel.url else { return }
+        Task {
+            var changed = false
+            await perform {
+                try await self.activateEmbeddingGemma(directory)
+                UserDefaults.standard.set(directory.path, forKey: Self.modelDirectoryKey)
+                changed = true
+            }
+            if changed { startIndexing() }
+        }
+        #endif
+    }
+    #if canImport(OpenFilesMLX)
+    private func activateEmbeddingGemma(_ directory: URL) async throws {
+        loadingEmbeddingModel = true
+        defer { loadingEmbeddingModel = false }
+        let backend = try await EmbeddingGemmaBackend.load(directory: directory)
+        try await library.setEmbeddingBackend { backend }
+        usesEmbeddingGemma = true; embeddingsAvailable = false; embeddingModelNotice = nil
+        indexProgress = library.indexMonitor.snapshot()
+        search()
+    }
+    #endif
+    func useAppleEmbeddings() {
+        guard !indexing, !busy, !loadingEmbeddingModel else { return }
+        Task {
+            var changed = false
+            await perform {
+                try await self.library.setEmbeddingBackend { NativeEmbeddingBackend() }
+                UserDefaults.standard.removeObject(forKey: Self.modelDirectoryKey)
+                self.usesEmbeddingGemma = false; self.embeddingsAvailable = false; self.embeddingModelNotice = nil
+                self.indexProgress = self.library.indexMonitor.snapshot()
+                self.search(); changed = true
+            }
+            if changed { startIndexing() }
+        }
     }
     func refresh() { reloadFolder(); startIndexing() }
     func navigate(to folder: URL, recordHistory: Bool = true) {

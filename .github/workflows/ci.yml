@@ -11,3 +11,17 @@ jobs:
         run: swift run --build-system native OpenFilesChecks
       - name: Build native app
         run: ./scripts/build-app.sh
+  mlx-test-and-build:
+    runs-on: macos-26
+    env:
+      OPENFILES_MLX: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show Xcode and Swift versions (Swift 6.3+ required)
+        run: |
+          xcodebuild -version
+          xcrun swift --version
+      - name: Test retrieval integration (model download is opt-in)
+        run: make test
+      - name: Build app and Metal resources
+        run: make build

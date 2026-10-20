@@ -4,6 +4,6 @@ build:
 run:
 	./scripts/run.sh
 test:
-	swift run --build-system native OpenFilesChecks
+	./scripts/test.sh
 release:
 	./scripts/build-app.sh release

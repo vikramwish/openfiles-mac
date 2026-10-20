@@ -21,7 +21,7 @@ Pause prevents new work after in-flight files finish. It is remembered across ap
 
 ## Tokenization, bounds, and hardware
 
-The current backend is **Apple NaturalLanguage / NLEmbedding**, not MLX. Apple owns the internal model tokenizer and compute placement. OpenFiles cannot report an accurate internal model-token count, GPU utilization, or Neural Engine use through this API. The panel labels its diagnostic `NLTokenizer` counts as **word units**, not model tokens. Avoiding duplicate inference also avoids the model's duplicate tokenization. Word counting happens once per newly computed content object, not for stat/content cache hits.
+The default backend is **Apple NaturalLanguage / NLEmbedding**. Apple owns its internal model tokenizer and compute placement. An optional Apple Silicon build supports **EmbeddingGemma 2 through MLX**, using one shared model container and distinct retrieval-query/document prompts; see [EMBEDDINGGEMMA.md](EMBEDDINGGEMMA.md). OpenFiles does not report model-token counts, GPU utilization, or Neural Engine use. The panel labels its diagnostic `NLTokenizer` counts as **word units**, separate from either model's tokenizer. Avoiding duplicate inference also avoids duplicate model tokenization. Word counting happens once per newly computed content object, not for stat/content cache hits.
 
 Text reads are capped at 64 KiB and retained transiently up to 12,000 characters; supported PDFs up to 5 MB are processed for at most 20 pages and 12,000 characters. Embedding input is capped at 4,000 characters. PDF byte metrics describe source bytes processed, not actual physical disk reads. Summed per-worker extraction/inference timings can exceed elapsed wall time.
 
@@ -55,4 +55,4 @@ This is one small synthetic run, not a universal speed claim. Duplicate content 
 - [Hugging Face swift-transformers](https://github.com/huggingface/swift-transformers): tokenizer and model-loading APIs; useful if a model with an exposed tokenizer is introduced.
 - [Apple Accelerate](https://developer.apple.com/documentation/accelerate): CPU vector arithmetic.
 
-`EmbeddingBackend` is the small injectable boundary for a future MLX/Core ML backend. No MLX package, model weights, external runtime, or model download is added by this change. A future backend must supply a stable model/tokenizer identity and reindex compatible objects; it should not label diagnostic word counts as model tokens.
+`EmbeddingBackend` is the injectable boundary for native inference. Its default query implementation preserves compatibility with existing backends; retrieval models can provide separate query prompting. The optional `OpenFilesMLX` target implements EmbeddingGemma 2. It requires a user-selected local checkpoint, fingerprints weights and tokenizer for cache compatibility, and reindexes after model changes. No automatic model download is performed. Diagnostic word counts remain separate from model tokens.

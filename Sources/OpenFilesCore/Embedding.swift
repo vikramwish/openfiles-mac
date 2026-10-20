@@ -6,18 +6,36 @@ import PDFKit
 
 public protocol EmbeddingBackend: Sendable {
     var identifier: String { get }
+    var displayName: String { get }
+    var acceptsLegacyVectors: Bool { get }
+    /// Document embeddings and retrieval queries can require different task prompts.
     func vector(for text: String) async -> [Double]?
+    func queryVector(for text: String) async -> [Double]?
+    func failureReason() async -> String?
+}
+
+public extension EmbeddingBackend {
+    var displayName: String { identifier }
+    var acceptsLegacyVectors: Bool { false }
+    func queryVector(for text: String) async -> [Double]? { await vector(for: text) }
+    func failureReason() async -> String? { nil }
 }
 
 /// Own one model per bounded worker. Apple's API controls its internal tokenizer/compute units.
 public actor NativeEmbeddingBackend: EmbeddingBackend {
     public nonisolated let identifier: String
+    public nonisolated let displayName = "Apple NaturalLanguage · English sentence embedding"
+    public nonisolated let acceptsLegacyVectors = true
     private var embedding: NLEmbedding?
     private var loaded = false
     public init() { identifier = "apple-nl-en-r\(NLEmbedding.currentSentenceEmbeddingRevision(for: .english))-prep2" }
     public func vector(for text: String) -> [Double]? {
         if !loaded { embedding = NLEmbedding.sentenceEmbedding(for: .english); loaded = true }
         return embedding?.vector(for: text)
+    }
+    public func queryVector(for text: String) -> [Double]? {
+        // Preserve the original Apple backend's query preparation.
+        vector(for: FileSearchQuery(text).text)
     }
 }
 

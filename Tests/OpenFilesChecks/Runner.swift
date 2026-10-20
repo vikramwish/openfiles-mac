@@ -53,13 +53,15 @@ struct Runner {
             catch { failCheck("\(name): \(error.localizedDescription)"); try? suite.tearDownWithError() }
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
         }
-        for (name, check) in IndexChecks.scenarios {
+        let additional = IndexChecks.scenarios + EmbeddingGemmaChecks.scenarios
+        for (name, check) in additional {
             let previous = log.failures
             do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
         }
         do { try await VaultChecks().testEncryptedVaultRoundTrip() } catch { failCheck("Encrypted vault: \(error.localizedDescription)") }
-        print("\(checks.count + IndexChecks.scenarios.count) core scenarios; \(log.failures) failures")
+        do { try await EmbeddingGemmaChecks.realModelIfRequested() } catch { failCheck("EmbeddingGemma 2: \(error.localizedDescription)") }
+        print("\(checks.count + additional.count) core scenarios; \(log.failures) failures")
         exit(log.failures == 0 ? 0 : 1)
     }
 }

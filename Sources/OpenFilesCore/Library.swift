@@ -11,8 +11,9 @@ public actor FileLibrary {
     private let fm = FileManager.default
     public nonisolated let indexMonitor = IndexMonitor()
     private let objects: EmbeddingObjects
-    private let embeddingFactory: @Sendable () -> any EmbeddingBackend
-    private let queryBackend: any EmbeddingBackend
+    private var embeddingFactory: @Sendable () -> any EmbeddingBackend
+    private var queryBackend: any EmbeddingBackend
+    private var embeddingGeneration = UUID()
     private var queryCache: [String: [Double]] = [:]
     private var scanRunning = false
     private var control: IndexControl?
@@ -32,10 +33,20 @@ public actor FileLibrary {
                 state.files[index].vector = await objects.lookup(key, engine: meta.engine)?.vector
             }
         }
-        if let report = state.lastIndexReport { indexMonitor.publish(report) }
+        if let report = state.lastIndexReport, report.engineID == queryBackend.identifier { indexMonitor.publish(report) }
         return state
     }
     public func current() -> LibraryState { state }
+    /// Switch only between passes. Old objects remain reusable if the user switches back.
+    public func setEmbeddingBackend(factory: @escaping @Sendable () -> any EmbeddingBackend) throws {
+        guard !scanRunning else { throw OpenFilesError.message("Stop indexing before changing the search model.") }
+        embeddingFactory = factory; queryBackend = factory(); embeddingGeneration = UUID()
+        queryCache.removeAll()
+        var progress = IndexProgress()
+        progress.engine = queryBackend.displayName; progress.engineID = queryBackend.identifier
+        progress.message = "Search model changed · check for changes to rebuild embeddings"
+        indexMonitor.publish(progress)
+    }
     private func save() throws {
         try JSONEncoder().encode(state).write(to: manifest, options: .atomic)
         try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifest.path)
@@ -128,15 +139,20 @@ public actor FileLibrary {
     public func searchMatches(_ input: String) async -> [FileSearchMatch] {
         let query = FileSearchQuery(input)
         guard !query.terms.isEmpty else { return [] }
-        let q = query.text
+        // Preserve natural-language meaning for retrieval models. Lexical matching still
+        // uses FileSearchQuery's grouped terms and evidence requirements below.
+        let q = IndexText.prepare(input)
+        let queryBackend = self.queryBackend, generation = embeddingGeneration
         let vector: [Double]?
         if let cached = queryCache[q] { vector = cached }
         else {
-            vector = await queryBackend.vector(for: q).map(VectorMath.normalized)
+            vector = await queryBackend.queryVector(for: q).map(VectorMath.normalized)
+            guard generation == embeddingGeneration else { return [] }
             if let vector { if queryCache.count >= 32 { queryCache.removeAll(keepingCapacity: true) }; queryCache[q] = vector }
         }
         let candidates = state.files.filter { FileSearchQuery.allows($0.url) && !FileRules.contains(directory, $0.url.canonical) }.map { file -> (FileRecord, Double) in
-            let similarity = !file.sensitive ? vector.flatMap { v in file.vector.map { file.indexMetadata == nil ? VectorMath.cosine(v, $0) : file.indexMetadata?.engine == self.queryBackend.identifier ? VectorMath.dot(v, $0) : 0 } } ?? 0 : 0
+            let compatible = file.indexMetadata.map { $0.engine == queryBackend.identifier } ?? queryBackend.acceptsLegacyVectors
+            let similarity = !file.sensitive && compatible ? vector.flatMap { v in file.vector.map { file.indexMetadata == nil ? VectorMath.cosine(v, $0) : VectorMath.dot(v, $0) } } ?? 0 : 0
             return (file, similarity)
         }.sorted {
             let left = query.coverage(in: $0.0.name), right = query.coverage(in: $1.0.name)
@@ -155,7 +171,8 @@ public actor FileLibrary {
             }
             return matches.sorted { $0.score == $1.score ? $0.file.url.path < $1.file.url.path : $0.score > $1.score }
         }
-        return await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
+        let matches = await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
+        return generation == embeddingGeneration ? matches : []
     }
     /// Compare saved bytes, including package contents, rather than modification dates.
     public func versionStatus(_ input: URL) throws -> String {
