@@ -2,6 +2,8 @@
 
 Use macOS 14+ and Swift 5.9+. Clone, then run `make test` and `make run`. Local features and automated tests need no credentials or third-party dependencies. Optional direct Google Drive and OneDrive connections require native app registrations; see [cloud storage setup](docs/CLOUD_STORAGE.md). Enter registration details in the app, which stores them and account tokens in Keychain.
 
+For the optional EmbeddingGemma 2 backend, use an Apple Silicon Mac with full Xcode and Swift 6.3+, then `OPENFILES_MLX=1 make test` and `OPENFILES_MLX=1 make run`. This build adds pinned MLX/tokenizer dependencies. See [docs/EMBEDDINGGEMMA.md](docs/EMBEDDINGGEMMA.md) for local checkpoint selection and the opt-in real-model test. Tests must keep model-required checks visibly separate from checks using injected backends.
+
 Create a short-lived branch (`codex/<topic>` for agent changes, or your team's chosen prefix), make a focused change, and open a PR to `main`. Include the resulting behavior, any data migration, and how it was verified. CI runs core tests and builds the app on macOS.
 
 ## Boundaries

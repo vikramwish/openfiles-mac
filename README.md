@@ -6,6 +6,8 @@ A native macOS file search utility with a Spotlight-style search panel, local do
 
 Requires **macOS 14+** and **Swift 5.9+** (Xcode or Command Line Tools). No npm, backend, or third-party packages. Local features need no credentials; optional Google Drive and OneDrive connections need native OAuth app registrations.
 
+These requirements describe the default Apple search backend. The optional EmbeddingGemma 2 build adds local MLX inference and has the additional requirements below.
+
 ```sh
 git clone https://github.com/yatinbayya/OpenFiles.git
 cd OpenFiles
@@ -23,6 +25,19 @@ swift run --build-system native OpenFilesCloudChecks  # Mocked provider checks; 
 ```
 
 Checks use a small dependency-free executable because Command Line Tools do not ship XCTest. They return a nonzero exit code on failure. The scripts select SwiftPM's `native` build engine because the Swift 6.4 Command Line Tools on the initial development machine cannot initialize the default Swift Build engine. This option also works with Swift 5.9. No full Xcode installation is needed to run locally.
+
+## EmbeddingGemma 2 search (optional)
+
+OpenFiles integrates [Google's EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) with the existing local search pipeline. It requires an **Apple Silicon Mac and full Xcode with Swift 6.3+**. Build with:
+
+```sh
+OPENFILES_MLX=1 make test
+OPENFILES_MLX=1 make run
+```
+
+Download a compatible checkpoint first, then open **Indexing activity → Search model → Use EmbeddingGemma 2…** and select its folder. The app checks and loads the model before saving your selection. Query and document text stays on your Mac; OpenFiles does not download weights or call an inference service. Changing models rebuilds embeddings on the next pass. The Apple model remains available.
+
+See [docs/EMBEDDINGGEMMA.md](docs/EMBEDDINGGEMMA.md) for model download commands, how retrieval works, cache compatibility, and the optional real-model check. Filename/Spotlight search and the existing relevance rules continue to apply: similarity boosts matches with filename/document evidence.
 
 ## Quick search
 

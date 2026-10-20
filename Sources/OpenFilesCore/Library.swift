@@ -14,8 +14,9 @@ public actor FileLibrary {
     public nonisolated let searchCatalog = SearchCatalog()
     public nonisolated let indexMonitor = IndexMonitor()
     private let objects: EmbeddingObjects
-    private let embeddingFactory: @Sendable () -> any EmbeddingBackend
-    let queryBackend: any EmbeddingBackend
+    private var embeddingFactory: @Sendable () -> any EmbeddingBackend
+    var queryBackend: any EmbeddingBackend
+    private var embeddingGeneration = UUID()
     private var queryCache: [String: [Double]] = [:]
     private var scanRunning = false
     private var control: IndexControl?
@@ -40,6 +41,16 @@ public actor FileLibrary {
         return state
     }
     public func current() -> LibraryState { state }
+    /// Switch only between passes. Old objects remain reusable if the user switches back.
+    public func setEmbeddingBackend(factory: @escaping @Sendable () -> any EmbeddingBackend) throws {
+        guard !scanRunning else { throw OpenFilesError.message("Stop indexing before changing the search model.") }
+        embeddingFactory = factory; queryBackend = factory(); embeddingGeneration = UUID()
+        queryCache.removeAll()
+        var progress = IndexProgress()
+        progress.engine = queryBackend.displayName; progress.engineID = queryBackend.identifier
+        progress.message = "Search model changed · check for changes to rebuild embeddings"
+        indexMonitor.publish(progress)
+    }
     func save() throws {
         try JSONEncoder().encode(state).write(to: manifest, options: .atomic)
         try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifest.path)
@@ -143,13 +154,15 @@ public actor FileLibrary {
         guard !plan.isEmpty else { return [] }
         if plan.topic.terms.isEmpty { return searchCatalog.matches(input) }
         let q = plan.topic.text
+        let backend = queryBackend, generation = embeddingGeneration
         let vector: [Double]?
         if let cached = queryCache[q] { vector = cached }
         else {
-            vector = await queryBackend.vector(for: q).map(VectorMath.normalized)
+            vector = await backend.queryVector(for: q).map(VectorMath.normalized)
+            guard generation == embeddingGeneration else { return [] }
             if let vector { if queryCache.count >= 32 { queryCache.removeAll(keepingCapacity: true) }; queryCache[q] = vector }
         }
-        return searchCatalog.matches(input, vector: vector, engine: queryBackend.identifier)
+        return searchCatalog.matches(input, vector: vector, engine: backend.identifier)
     }
     public func saveSmartCollection(_ query: String) throws -> [SmartCollection] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)

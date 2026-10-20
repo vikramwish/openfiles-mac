@@ -25,6 +25,7 @@ struct IndexingView: View {
                         metric("Active time", value: String(format: "%.2fs", progress.activeSeconds), detail: String(format: "%.1f files/sec", progress.filesPerSecond))
                     }
                     HStack(alignment: .top, spacing: 20) { configuration; engine }
+                    searchModel
                     exclusions
                     HStack(alignment: .top, spacing: 20) { scopes; skips }
                     events
@@ -73,9 +74,29 @@ struct IndexingView: View {
             Text(progress.engineID.isEmpty ? "Model loads lazily when needed" : progress.engineID).font(.caption2.monospaced()).foregroundStyle(.secondary)
             Text("\(progress.workers) workers · CPU vector search via Accelerate").font(.caption)
             Text(String(format: "Extraction %.3fs · Word counting %.3fs · Inference %.3fs", progress.extractionSeconds, progress.tokenizationSeconds, progress.embeddingSeconds)).font(.caption).foregroundStyle(.secondary)
-            Text("\(progress.wordUnits) word units newly counted. These are not model tokens: Apple owns internal tokenization and does not expose GPU/Neural Engine placement. Timings sum across workers, so may exceed wall time.").font(.caption).foregroundStyle(.secondary).lineSpacing(3)
+            Text("\(progress.wordUnits) word units newly counted using macOS word segmentation, separate from the search model’s tokens. Timings sum across workers, so may exceed wall time.").font(.caption).foregroundStyle(.secondary).lineSpacing(3)
             Text("¹ Text reports bytes read; PDFs report source bytes processed, not physical disk I/O. Extracted document text is never saved to the index.").font(.caption2).foregroundStyle(.secondary)
         }.frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+    private var searchModel: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text("Search model").font(.headline)
+            Text(model.usesEmbeddingGemma ? "EmbeddingGemma 2 · on this Mac" : "Apple NaturalLanguage · English").font(.system(size: 11))
+            if model.loadingEmbeddingModel {
+                HStack { ProgressView().controlSize(.small); Text("Checking and loading the model…").font(.system(size: 11)) }
+            }
+            HStack {
+                Button("Use EmbeddingGemma 2…") { model.chooseEmbeddingGemma() }.disabled(!model.supportsEmbeddingGemma)
+                if model.usesEmbeddingGemma || model.embeddingModelNotice != nil {
+                    Button("Use Apple model") { model.useAppleEmbeddings() }
+                }
+            }.disabled(model.indexing || model.busy || model.loadingEmbeddingModel)
+            if !model.supportsEmbeddingGemma {
+                Text("EmbeddingGemma is available in the optional Apple Silicon build.").font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            Text("Choose a downloaded model folder. Documents and queries stay on this Mac. Stop indexing before changing models; unchanged files are re-embedded when the model changes.").font(.system(size: 10)).foregroundStyle(.secondary)
+            if let notice = model.embeddingModelNotice { Text(notice).font(.system(size: 10)).foregroundStyle(.orange) }
+        }
     }
     private var exclusions: some View {
         VStack(alignment: .leading, spacing: 9) {

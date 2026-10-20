@@ -4,8 +4,7 @@ build:
 run:
 	./scripts/run.sh
 test:
-	swift run --build-system native OpenFilesChecks
-	swift run --build-system native OpenFilesCloudChecks
+	./scripts/test.sh
 test-cloud:
 	swift run --build-system native OpenFilesCloudChecks
 release:
