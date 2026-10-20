@@ -73,7 +73,7 @@ struct IndexingView: View {
             if progress.phase == .failed || progress.phase == .cancelled || progress.phase == .paused {
                 Text(progress.message).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
             } else {
-                Text(model.indexing ? "Completed batches are searchable immediately. Personal documents are processed before source code; the first scan can take several minutes." : "OpenFiles checks for changes while it’s running.").font(.callout).foregroundStyle(.secondary)
+                Text(model.indexing ? "Completed batches are searchable immediately. Each batch prioritizes personal documents; the first scan can take several minutes." : "OpenFiles checks for changes while it’s running.").font(.callout).foregroundStyle(.secondary)
             }
             if progress.limitReached { Label("More files may be available. Adjust the file limit in Technical details to include them.", systemImage: "info.circle").font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
 

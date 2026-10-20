@@ -51,7 +51,7 @@ struct PhotoToolChecks {
         checkEqual(review.photos.count, 3); checkEqual(review.groups.count, 1); checkEqual(review.skipped, 1)
         checkEqual(try Data(contentsOf: database), db); checkEqual(try Data(contentsOf: a), bytes)
         checkEqual(try FileStamp.read(a), stamp)
-        checkEqual(Set(review.groups.first?.items.map(\.id) ?? []), Set([a.path, b.path]))
+        checkEqual(Set(review.groups.first?.items.map(\.id) ?? []), Set([a.canonical.path, b.canonical.path]))
         let job = Task { try await PhotoArchive.review(library) }; job.cancel()
         do { _ = try await job.value; failCheck("Cancelled archive scan completed") } catch is CancellationError {} catch { failCheck(error.localizedDescription) }
     }
