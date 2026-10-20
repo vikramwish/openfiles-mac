@@ -13,6 +13,7 @@ struct LibraryPhoto: Identifiable {
     let asset: PHAsset?
     var terms: [String]
     var albums: [String] = []
+    var isScreenshot: Bool = false
 }
 
 private final class PhotoResourceHash: @unchecked Sendable {
@@ -26,10 +27,22 @@ private final class PhotoResourceHash: @unchecked Sendable {
     }
 }
 
+enum PhotoReviewMode: String { case all, duplicates, similar, screenshots }
+enum PhotoSimilarityScope: String, CaseIterable {
+    case veryClose = "Very close", broader = "Broader matches"
+    var radius: Float { self == .veryClose ? 0.25 : 0.40 }
+}
+
 @MainActor
 final class PhotoLibraryModel: ObservableObject {
     @Published private(set) var items: [LibraryPhoto] = []
     @Published private(set) var groups: [PhotoDuplicateGroup] = []
+    @Published private(set) var similarGroups: [PhotoSimilarityGroup] = []
+    @Published private(set) var screenshotSuggestions: [String: ScreenshotAssessment] = [:]
+    private var screenshotFingerprints: [String: PhotoFingerprint] = [:]
+    private var screenshotRevisions: [String: Date] = [:]
+    private var screenshotTerms: [String: [String]] = [:]
+    private var reviewed: [String: PhotoFingerprint] = [:]
     @Published private(set) var connected = false
     @Published private(set) var archive: URL?
     @Published private(set) var busy = false
@@ -37,11 +50,23 @@ final class PhotoLibraryModel: ObservableObject {
     @Published var error: String?
     @Published var selected = Set<String>()
     @Published var query = ""
-    @Published var duplicatesOnly = false
+    @Published var reviewMode: PhotoReviewMode = .all { didSet { if oldValue != reviewMode { selected = [] } } }
+    @Published var similarityScope: PhotoSimilarityScope = .veryClose
+    var duplicatesOnly: Bool {
+        get { reviewMode == .duplicates }
+        set { reviewMode = newValue ? .duplicates : .all }
+    }
+    var similarOnly: Bool { reviewMode == .similar }
+    var screenshotsOnly: Bool { reviewMode == .screenshots }
+    private struct CachedVisual {
+        let stamp: FileStamp?
+        let date: Date?
+        let signature: PhotoVisualSignature
+    }
+    private var visualCache: [String: CachedVisual] = [:]
     @Published var allowDownloads = false
     @Published var albumName = ""
     private var job: Task<Void, Never>?
-    private var reviewed: [String: PhotoFingerprint] = [:]
     private var revisions: [String: Date] = [:]
     private var analysis: [String: [String]] = [:]
     private var analysisRevisions: [String: Date] = [:]
@@ -49,9 +74,12 @@ final class PhotoLibraryModel: ObservableObject {
     var selectedItems: [LibraryPhoto] { items.filter { selected.contains($0.id) } }
     var visibleItems: [LibraryPhoto] {
         let duplicateIDs = Set(groups.flatMap { $0.items.map(\.id) })
+        let similarIDs = Set(similarGroups.flatMap(\.photoIDs))
         let plan = NavigationQuery(query)
-        return items.filter { item in
+        let visible = items.filter { item in
             guard !duplicatesOnly || duplicateIDs.contains(item.id) else { return false }
+            guard !similarOnly || similarIDs.contains(item.id) else { return false }
+            guard !screenshotsOnly || screenshotSuggestions[item.id] != nil else { return false }
             if let after = plan.after, (item.date ?? .distantPast) < after { return false }
             if let before = plan.before, (item.date ?? .distantFuture) >= before { return false }
             let text = ([item.name, item.date?.formatted(date: .long, time: .omitted) ?? "", "photo photos picture pictures image images"] + item.terms).joined(separator: " ")
@@ -62,8 +90,16 @@ final class PhotoLibraryModel: ObservableObject {
                 FileSearchQuery.words(alias).allSatisfy { word in words.contains { $0.hasPrefix(word) } }
             } }
         }
+        if screenshotsOnly {
+            return visible.sorted {
+                let a = screenshotSuggestions[$0.id]?.score ?? 0, b = screenshotSuggestions[$1.id]?.score ?? 0
+                return a == b ? ($0.date ?? .distantFuture) < ($1.date ?? .distantFuture) : a > b
+            }
+        }
+        return visible
     }
     func selectExtraCopies() {
+        guard duplicatesOnly else { return }
         let byID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         selected = Set(groups.flatMap { group -> [String] in
             let ranked = group.items.sorted { lhs, rhs in
@@ -78,7 +114,7 @@ final class PhotoLibraryModel: ObservableObject {
     }
 
     var canRemoveDuplicates: Bool {
-        guard !busy, archive == nil, connected else { return false }
+        guard duplicatesOnly, !busy, archive == nil, connected else { return false }
         return (try? PhotoDuplicates.validate(selected, in: groups)) != nil
     }
     func connect() {
@@ -124,13 +160,14 @@ final class PhotoLibraryModel: ObservableObject {
                 if let location = asset.location { terms += PhotoMediaAnalysis.placeTerms(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude) }
                 if asset.isFavorite { terms += ["favorite", "favourite"] }
                 if asset.mediaType == .video { terms += ["video", "movie"] }
-                photos.append(.init(id: asset.localIdentifier, name: resources.first?.originalFilename ?? "Photo", date: asset.creationDate, favorite: asset.isFavorite, url: nil, asset: asset, terms: terms, albums: memberAlbums))
+photos.append(.init(id: asset.localIdentifier, name: resources.first?.originalFilename ?? "Photo", date: asset.creationDate, favorite: asset.isFavorite, url: nil, asset: asset, terms: terms, albums: memberAlbums, isScreenshot: asset.mediaSubtypes.contains(.photoScreenshot)))
             }
             return photos
         }
         let photos = try await withTaskCancellationHandler { try await loader.value } onCancel: { loader.cancel() }
         try Task.checkCancellation()
-        items = photos; groups = []; reviewed = [:]; revisions = [:]; selected = []
+items = photos; groups = []; reviewed = [:]; similarGroups = []; screenshotSuggestions = [:]; screenshotFingerprints = [:]; screenshotRevisions = [:]; screenshotTerms = [:]; revisions = [:]; selected = []
+        let currentIDs = Set(photos.map(\.id)); visualCache = visualCache.filter { currentIDs.contains($0.key) }
         status = "\(photos.count) photos and videos available through macOS. Cloud-only originals may need downloading."
     }
     func chooseLibrary() {
@@ -148,9 +185,11 @@ final class PhotoLibraryModel: ObservableObject {
             }
             let result = try await withTaskCancellationHandler { try await scanner.value } onCancel: { scanner.cancel() }
             try Task.checkCancellation()
-            self.archive = result.library; self.connected = true; self.groups = result.groups
+self.archive = result.library; self.connected = true; self.groups = result.groups
             self.reviewed = Dictionary(result.groups.flatMap(\.items).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            self.similarGroups = []; self.screenshotSuggestions = [:]; self.screenshotFingerprints = [:]; self.screenshotRevisions = [:]; self.screenshotTerms = [:]
             self.items = result.photos.map { .init(id: $0.id, name: $0.url.lastPathComponent, date: $0.stamp.modified, favorite: false, url: $0.url, asset: nil, terms: self.archiveAnalysisStamps[$0.id] == $0.stamp ? self.analysis[$0.id] ?? [] : []) }
+            let currentIDs = Set(self.items.map(\.id)); self.visualCache = self.visualCache.filter { currentIDs.contains($0.key) }
             self.selected = []; self.duplicatesOnly = !result.groups.isEmpty
             self.status = "\(result.photos.count) local originals · \(result.groups.count) duplicate groups · \(result.skipped) skipped. Read-only library inspection; edits and albums are available through Connect Photos."
         }
@@ -171,9 +210,145 @@ final class PhotoLibraryModel: ObservableObject {
                 catch { skipped += 1 }
             }
             self.groups = PhotoDuplicates.groups(prints)
-            self.reviewed = Dictionary(prints.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             self.revisions = dates; self.selected = []; self.duplicatesOnly = true
             self.status = "\(self.groups.count) exact duplicate groups · \(prints.count) fully checked · \(skipped) unavailable or changed. Edited resources and Live Photo components must also match."
+        }
+    }
+    func findSimilar() {
+        let snapshot = items, radius = similarityScope.radius
+        run {
+            var signatures: [String: PhotoVisualSignature] = [:], skipped = 0
+            for (index, item) in snapshot.enumerated() {
+                try Task.checkCancellation()
+                self.status = "Comparing photo appearance · \(index + 1) of \(snapshot.count)"
+                do {
+                    let stamp: FileStamp?, date: Date?, asset: PHAsset?
+                    if let url = item.url { stamp = try FileStamp.read(url); date = nil; asset = nil }
+                    else {
+                        guard let fresh = self.fetch(item.id), fresh.mediaType == .image else { skipped += 1; continue }
+                        stamp = nil; date = fresh.modificationDate; asset = fresh
+                    }
+                    if let cached = self.visualCache[item.id], cached.stamp == stamp, cached.date == date {
+                        signatures[item.id] = cached.signature; continue
+                    }
+                    let signature: PhotoVisualSignature
+                    if let url = item.url {
+                        let worker = Task.detached(priority: .utility) { try PhotoVisualAnalysis.signature(at: url) }
+                        signature = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+                        guard try FileStamp.read(url) == stamp else { skipped += 1; continue }
+                    } else {
+                        guard let asset, let image = await PhotoThumbnails.image(asset: asset, size: 1024, network: self.allowDownloads),
+                              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { skipped += 1; continue }
+                        let worker = Task.detached(priority: .utility) { try PhotoVisualAnalysis.signature(image: cgImage) }
+                        signature = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+                        guard self.fetch(item.id)?.modificationDate == date else { skipped += 1; continue }
+                    }
+                    try Task.checkCancellation()
+                    signatures[item.id] = signature
+                    self.visualCache[item.id] = CachedVisual(stamp: stamp, date: date, signature: signature)
+                } catch is CancellationError { throw CancellationError() }
+                catch { skipped += 1 }
+            }
+            self.status = "Grouping similar-looking photos…"
+            let ready = signatures
+            let worker = Task.detached(priority: .utility) {
+                try PhotoSimilarity.groups(ids: Array(ready.keys), radius: radius) { a, b in
+                    guard let first = ready[a], let second = ready[b] else { throw OpenFilesError.message("Visual description missing") }
+                    return try first.distance(to: second)
+                }
+            }
+            let result = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+            try Task.checkCancellation()
+            self.similarGroups = result; self.reviewMode = .similar; self.selected = []
+            self.status = "\(result.count) similar-looking groups · \(signatures.count) photos compared · \(skipped) unavailable or unsupported. Visual similarity is a suggestion, not proof of a duplicate."
+        }
+    }
+    func screenshotRemovalAvailable(_ id: String) -> Bool { screenshotFingerprints[id] != nil }
+    var canRemoveScreenshots: Bool {
+        screenshotsOnly && archive == nil && !busy && !selected.isEmpty && selected.allSatisfy { screenshotSuggestions[$0] != nil && screenshotFingerprints[$0] != nil }
+    }
+    func reviewScreenshots() {
+        let snapshot = items
+        run {
+            let now = Date()
+            var suggestions: [String: ScreenshotAssessment] = [:], prints: [String: PhotoFingerprint] = [:], dates: [String: Date] = [:], termsByID: [String: [String]] = [:]
+            var unavailable = 0, analyzed = 0
+            for (index, item) in snapshot.enumerated() {
+                try Task.checkCancellation()
+                guard !FileRules.sensitive(item.name) else { continue }
+                self.status = "Reviewing older screenshots · \(index + 1) of \(snapshot.count)"
+                let source: ScreenshotSource, modified: Date, created: Date?, lastUsed: Date?, kept: Bool, asset: PHAsset?
+                if let url = item.url {
+                    let metadata = SystemScreenshotMetadata().metadata(for: url)
+                    guard let detected = ScreenshotReview.source(for: url, metadata: metadata), let stamp = try? FileStamp.read(url) else { continue }
+                    source = detected; modified = stamp.modified; created = metadata.created; lastUsed = metadata.lastUsed; kept = !metadata.tags.isEmpty; asset = nil
+                } else {
+                    guard let current = self.fetch(item.id), current.mediaSubtypes.contains(.photoScreenshot) else { continue }
+                    source = .photosMetadata; modified = current.modificationDate ?? current.creationDate ?? now
+                    created = current.creationDate; lastUsed = nil; asset = current
+                    kept = current.isFavorite || PHAssetCollection.fetchAssetCollectionsContaining(current, with: .album, options: nil).count > 0
+                }
+                var signals = ScreenshotSignals(source: source, created: created, modified: modified, lastUsed: lastUsed, kept: kept)
+                guard ScreenshotReview.isOldUnkept(signals, now: now) else { continue }
+                do { signals.contentTerms = try await self.readScreenshotTerms(item: item, asset: asset); analyzed += 1 }
+                catch is CancellationError { throw CancellationError() }
+                catch { unavailable += 1 }
+                signals.hasNewerRelatedCapture = self.similarGroups.contains { group in
+                    group.photoIDs.contains(item.id) && snapshot.contains { other in
+                        other.isScreenshot && group.photoIDs.contains(other.id) && (other.date ?? .distantPast) > (item.date ?? .distantPast)
+                    }
+                }
+                guard let assessment = ScreenshotReview.assess(signals, now: now) else { continue }
+                if let asset {
+                    do { prints[item.id] = try await self.fingerprint(asset); dates[item.id] = modified }
+                    catch is CancellationError { throw CancellationError() }
+                    catch { unavailable += 1 }
+                }
+                suggestions[item.id] = assessment
+                if let terms = signals.contentTerms { termsByID[item.id] = terms }
+            }
+            try Task.checkCancellation()
+            self.screenshotSuggestions = suggestions; self.screenshotFingerprints = prints; self.screenshotRevisions = dates; self.screenshotTerms = termsByID
+            self.reviewMode = .screenshots; self.selected = []
+            self.status = "\(suggestions.count) older screenshots to review · \(analyzed) contents analyzed · \(unavailable) checks unavailable. Favorites, albums, recent changes, and recognized records stay out. Viewing history is not available for Photos assets."
+        }
+    }
+    private func readScreenshotTerms(item: LibraryPhoto, asset: PHAsset?) async throws -> [String] {
+        let url: URL, temporary: Bool
+        if let file = item.url { url = file; temporary = false }
+        else {
+            guard let asset, let image = await PhotoThumbnails.image(asset: asset, size: 1024, network: allowDownloads), let data = image.tiffRepresentation else {
+                throw OpenFilesError.message("Screenshot contents unavailable")
+            }
+            url = FileManager.default.temporaryDirectory.appendingPathComponent("OpenFilesScreenshot-\(UUID()).tiff")
+            try data.write(to: url, options: .atomic); temporary = true
+        }
+        defer { if temporary { try? FileManager.default.removeItem(at: url) } }
+        let worker = Task.detached(priority: .utility) { try PhotoMediaAnalysis.terms(at: url) }
+        let terms = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+        try Task.checkCancellation()
+        return terms
+    }
+    func removeReviewedScreenshots() {
+        let ids = selected
+        guard canRemoveScreenshots else { return }
+        run {
+            for id in ids {
+                try Task.checkCancellation()
+                guard let asset = self.fetch(id), asset.mediaSubtypes.contains(.photoScreenshot),
+                      (asset.modificationDate ?? asset.creationDate ?? .distantPast) == self.screenshotRevisions[id],
+                      let expected = self.screenshotFingerprints[id]?.signature else { throw OpenFilesError.message("Screenshot review is stale. Review screenshots again.") }
+                let kept = asset.isFavorite || PHAssetCollection.fetchAssetCollectionsContaining(asset, with: .album, options: nil).count > 0
+                let signals = ScreenshotSignals(source: .photosMetadata, created: asset.creationDate, modified: asset.modificationDate ?? asset.creationDate ?? Date(), kept: kept, contentTerms: self.screenshotTerms[id])
+                guard ScreenshotReview.assess(signals) != nil, try await self.fingerprint(asset).signature == expected else {
+                    throw OpenFilesError.message("A screenshot changed or was saved to keep. Review screenshots again.")
+                }
+            }
+            try Task.checkCancellation()
+            let assets = PHAsset.fetchAssets(withLocalIdentifiers: Array(ids), options: nil)
+            guard assets.count == ids.count else { throw OpenFilesError.message("A selected screenshot is no longer available.") }
+            try await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.deleteAssets(assets) }
+            try await self.reload(); self.status = "Removed \(ids.count) reviewed screenshots through macOS. Changes may sync to iCloud and your other devices."
         }
     }
     private func fetch(_ id: String) -> PHAsset? { PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject }
@@ -201,7 +376,7 @@ final class PhotoLibraryModel: ObservableObject {
     }
     func removeSelectedDuplicates() {
         let selection = selected, plan = groups
-        guard archive == nil else { return }
+        guard archive == nil, duplicatesOnly else { return }
         run {
             try PhotoDuplicates.validate(selection, in: plan)
             let affected = plan.filter { !$0.items.allSatisfy { !selection.contains($0.id) } }

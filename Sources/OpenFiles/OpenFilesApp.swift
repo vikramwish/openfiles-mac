@@ -65,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         do {
             model.state = try await model.library.load()
             await model.packs.load()
+            await model.collections.load()
             await model.protection.load()
             model.packs.selectedID = model.packs.packs.first?.id
             model.indexSettings = model.state.indexSettings ?? model.indexSettings
@@ -81,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             if let fixture = smokeRoot?.appendingPathComponent("Demo.photoslibrary"), FileManager.default.fileExists(atPath: fixture.path) {
                 model.photoLibrary.inspect(fixture)
             }
+case "collections": model.section = .collections; model.selectedCollectionID = model.collections.collections.first?.id
         case "packs": model.section = .packs
         case "protection": model.section = .protection
         case "history": model.section = .history

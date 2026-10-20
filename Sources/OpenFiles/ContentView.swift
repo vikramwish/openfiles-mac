@@ -29,9 +29,11 @@ struct ContentView: View {
                     } else if model.section == .cloud {
                         CloudBrowserView(model: cloudModel)
                     } else {
-                        HomeView(packs: model.packs) {
+                        Group {
                             switch model.section {
-                            case .home, .organize: OrganizationView(session: organizationSession, automaticallyAnalyze: true)
+                            case .home: HomeView(collections: model.collections)
+                            case .collections: CollectionsView(collections: model.collections)
+                            case .organize: OrganizationView(session: organizationSession, automaticallyAnalyze: true)
                             case .photos: PhotoLibraryView(model: model.photoLibrary)
                             case .cleanup: CleanupView(model: model.cleanup)
                             case .packs: DocumentPacksView(packs: model.packs)
@@ -74,6 +76,8 @@ struct ContentView: View {
                 }.font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.vertical, 8)
             }.background(Color(nsColor: .textBackgroundColor))
         }
+        .task { await model.collections.load() }
+        .background(CollectionErrorPresenter(collections: model.collections))
         .background(NativeWindowChrome(model: model, toggleSidebar: {
             columns = columns == .detailOnly ? .all : .detailOnly
         }, showsInspector: $showsInspector, focusSearchRequest: focusSearchRequest).frame(width: 0, height: 0))
@@ -116,13 +120,13 @@ struct ContentView: View {
                     return current.absoluteString
                 }
             }
-            return model.section == .cloud || model.section == .files ? model.section.rawValue : AppModel.Section.home.rawValue
+            return model.section.rawValue
         }, set: { value in
             guard let value else { return }
-            if value.hasPrefix("provider:"), let provider = CloudProvider(rawValue: String(value.dropFirst(9))) {
+if value.hasPrefix("provider:"), let provider = CloudProvider(rawValue: String(value.dropFirst(9))) {
                 cloudModel.selectProvider(provider); model.section = .cloud
             }
-            else if let section = AppModel.Section(rawValue: value) { model.section = section }
+            else if let section = AppModel.Section(rawValue: value) { model.query = ""; model.section = section }
             else if let url = URL(string: value) { model.navigate(to: url) }
         })
     }
@@ -130,9 +134,16 @@ struct ContentView: View {
     private var sidebar: some View {
         List(selection: sidebarSelection) {
             Section {
-                Label("Workspace", systemImage: "sparkles").tag(AppModel.Section.home.rawValue)
+                Label("Home", systemImage: "house").tag(AppModel.Section.home.rawValue)
+                Label("Collections", systemImage: "rectangle.stack").tag(AppModel.Section.collections.rawValue)
+                Label("Prepare documents", systemImage: "checklist").tag(AppModel.Section.packs.rawValue)
                 Label("Browse files", systemImage: "folder").tag(AppModel.Section.files.rawValue)
                 Label("Cloud storage", systemImage: "cloud").tag(AppModel.Section.cloud.rawValue)
+            }
+            Section("Tools") {
+                ForEach([AppModel.Section.protection, .history, .organize, .cleanup, .photos, .vault]) { section in
+                    Label(section.rawValue, systemImage: section.icon).tag(section.rawValue)
+                }
             }
             Section("Favorites") {
                 ForEach(model.locations, id: \.url) { location in

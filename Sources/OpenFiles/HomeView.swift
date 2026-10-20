@@ -3,87 +3,94 @@ import OpenFilesCore
 
 private typealias HomeState<Value> = SwiftUI.State<Value>
 
-/// The task controls stay in place while the work below changes.
-@MainActor
-struct HomeView<Content: View>: View {
+/// Search is always available; collections provide a place to continue a task.
+struct HomeView: View {
     @EnvironmentObject private var model: AppModel
-    @ObservedObject var packs: DocumentPacksModel
-    @ViewBuilder var content: () -> Content
-    @HomeState private var search = ""
-    @HomeState private var showingResults = false
-
-    private let tasks: [(AppModel.Section, String, String, String)] = [
-        (.organize, "Organize", "Bring related files together", "tray.2"),
-        (.photos, "Photos", "Search, albums, and duplicates", "photo.on.rectangle.angled"),
-        (.cleanup, "Clean up", "Find duplicates and make room", "sparkles.rectangle.stack"),
-        (.protection, "Protect", "Keep saved changes automatically", "shield.lefthalf.filled"),
-        (.history, "Recover", "Restore an earlier version", "clock.arrow.circlepath"),
-        (.packs, "Collect documents", "Gather and export paperwork", "checklist"),
-        (.vault, "Private vault", "Lock away private files", "lock.shield")
-    ]
-
+    @ObservedObject var collections: CollectionsModel
+    @HomeState private var creating = false
+    @FocusState private var searchFocused: Bool
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Your files, taken care of.").font(.title.weight(.semibold))
-                    Spacer()
-                    Button { model.chooseOrganizationFolder() } label: { Label("Add folder", systemImage: "folder.badge.plus") }
-                    Button { model.showingIndexing = true } label: { Label("File activity", systemImage: "waveform.path") }
-                }
+                Text("Find what you need.").font(.largeTitle.weight(.semibold))
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField(model.section == .photos ? "Find photos by name, date, place, or contents…" : "Find a file by name, contents, or date…", text: $search)
-                        .textFieldStyle(.plain).onSubmit(findFiles)
-                        .accessibilityLabel("Find files")
-                    if showingResults {
-                        Button("Clear") { search = ""; model.query = ""; showingResults = false }
-                    }
-                    Button("Find", action: findFiles)
-                        .disabled(search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }.padding(12).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 140), spacing: 8), count: 4), spacing: 8) {
-                    ForEach(tasks, id: \.0) { task in
-                        Button {
-                            showingResults = false
-                            model.query = ""
-                            model.section = task.0
-                        } label: {
-                            HStack(alignment: .top, spacing: 10) {
-                                Image(systemName: task.3).font(.title3).foregroundStyle(.tint).frame(width: 24)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(task.1).font(.headline)
-                                    Text(task.2).font(.caption).foregroundStyle(.secondary).lineLimit(nil)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                Spacer(minLength: 0)
-                            }.padding(10).frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
-                                .background(selected(task.0) && !showingResults ? Color.accentColor.opacity(0.10) : Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
-                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected(task.0) && !showingResults ? Color.accentColor : Color.clear))
-                                .contentShape(Rectangle())
-                        }.buttonStyle(.plain).accessibilityAddTraits(selected(task.0) && !showingResults ? .isSelected : [])
-                    }
+                    TextField("Search by name, contents, or date…", text: Binding(
+                        get: { model.query },
+                        set: { model.searchThisFolder = false; model.query = $0 }
+                    ))
+                    .textFieldStyle(.plain).font(.title3).focused($searchFocused)
+                    .accessibilityLabel("Search your files")
+                    if !model.query.isEmpty {
+                        Button { model.query = ""; searchFocused = true } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("Clear search")
+                    } else { Text("⌘F").font(.caption).foregroundStyle(.secondary) }
+                }.padding(14).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                if model.query.isEmpty {
+                    Text("Try “PDFs in Downloads this month” or words from a document.")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
-            }.padding(20)
-            Divider()
-            Group {
-                if showingResults { BrowserView() }
-                else { content() }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }.padding(24)
+            if !model.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Divider()
+                BrowserView()
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        HStack {
+                            Text("Your collections").font(.title2.weight(.semibold))
+                            Spacer()
+                            Button("New collection", systemImage: "plus") { creating = true }.disabled(collections.busy)
+                        }
+                        Text("Keep files for a trip, course, or project together. Originals stay where they are.")
+                            .font(.callout).foregroundStyle(.secondary)
+                        if collections.collections.isEmpty {
+                            ContentUnavailableView {
+                                Label("A place for your next task", systemImage: "rectangle.stack")
+                            } description: {
+                                Text("Create a collection, then add files from search or choose them from any folder.")
+                            } actions: {
+                                Button("Create collection") { creating = true }.disabled(collections.busy)
+                            }.frame(maxWidth: .infinity).padding(.vertical, 20)
+                        } else {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
+                                ForEach(collections.collections.prefix(6)) { collection in
+                                    Button {
+                                        model.selectedCollectionID = collection.id; model.section = .collections
+                                    } label: {
+                                        VStack(alignment: .leading, spacing: 12) {
+                                            Image(systemName: "rectangle.stack").font(.title2).foregroundStyle(.tint)
+                                            Text(collection.title).font(.headline).lineLimit(2)
+                                            Text("\(collection.files.count) references").font(.callout).foregroundStyle(.secondary)
+                                        }.frame(maxWidth: .infinity, minHeight: 100, alignment: .leading).padding(16)
+                                            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                                            .contentShape(RoundedRectangle(cornerRadius: 10))
+                                    }.buttonStyle(.plain)
+                                }
+                            }
+                            Button("View all collections") { model.selectedCollectionID = nil; model.section = .collections }
+                        }
+                        Divider().padding(.vertical, 4)
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: "checklist").font(.title2).foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Preparing paperwork?").font(.headline)
+                                Text("Use a checklist to review documents and export copies for a rental, trip, or expense claim.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                                Button("Prepare documents") { model.section = .packs }
+                            }
+                        }
+                    }.padding(.horizontal, 24).padding(.bottom, 24)
+                }
+            }
         }
-        .onChange(of: model.query) {
-            search = model.query
-            showingResults = model.section != .photos && !model.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        .onAppear { searchFocused = true }
+        .sheet(isPresented: $creating) {
+            CollectionNameSheet(heading: "New collection") { title in
+                guard let id = await collections.create(title) else { return false }
+                model.selectedCollectionID = id; model.section = .collections
+                return true
+            }
         }
-    }
-    private func selected(_ section: AppModel.Section) -> Bool {
-        model.section == section || (section == .organize && model.section == .home)
-    }
-    private func findFiles() {
-        let text = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        model.searchThisFolder = false
-        model.query = text
-        showingResults = model.section != .photos
     }
 }

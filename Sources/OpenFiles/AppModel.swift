@@ -164,6 +164,8 @@ final class AppModel: ObservableObject {
     let library: FileLibrary
     let vault: EncryptedVault
     let packs: DocumentPacksModel
+    let collections: CollectionsModel
+    @Published var selectedCollectionID: UUID?
     let protection: ProtectionModel
     let cleanup: CleanupModel
     private let storageDirectory: URL
@@ -174,10 +176,10 @@ final class AppModel: ObservableObject {
     private var searchTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
     enum Section: String, CaseIterable, Identifiable {
-        case photos = "Photos", home = "Home", packs = "Prepare documents", files = "Browse files", cloud = "Cloud storage", organize = "Organize", cleanup = "Clean up", history = "Version history", protection = "Automatic versions", vault = "Private vault"
+        case collections = "Collections", photos = "Photos", home = "Home", packs = "Prepare documents", files = "Browse files", cloud = "Cloud storage", organize = "Organize", cleanup = "Clean up", history = "Version history", protection = "Automatic versions", vault = "Private vault"
         var id: String { rawValue }
-        var icon: String { switch self { case .photos: "photo.on.rectangle.angled"; case .cleanup: "sparkles.rectangle.stack"; case .home: "house"; case .packs: "checklist"; case .protection: "shield.lefthalf.filled"; case .files: "square.grid.2x2"; case .cloud: "cloud"; case .organize: "tray.2"; case .history: "clock.arrow.circlepath"; case .vault: "lock.shield" } }
-        var subtitle: String { switch self { case .photos: "Find, organize, and clean up photos."; case .cleanup: "Review duplicates and files you may no longer need."; case .home: "Your files, ready for what’s next."; case .packs: "Get your paperwork ready."; case .protection: "Keep saved changes automatically."; case .files: "Find the file you’re thinking of."; case .cloud: "Browse Google Drive and OneDrive directly."; case .organize: "A place for everything, with you in control."; case .history: "Keep the moments that matter."; case .vault: "An encrypted home for private files." } }
+        var icon: String { switch self { case .collections: "rectangle.stack"; case .photos: "photo.on.rectangle.angled"; case .cleanup: "sparkles.rectangle.stack"; case .home: "house"; case .packs: "checklist"; case .protection: "shield.lefthalf.filled"; case .files: "square.grid.2x2"; case .cloud: "cloud"; case .organize: "tray.2"; case .history: "clock.arrow.circlepath"; case .vault: "lock.shield" } }
+        var subtitle: String { switch self { case .collections: "Related files, together in one place."; case .photos: "Find, organize, and clean up photos."; case .cleanup: "Review duplicates and files you may no longer need."; case .home: "Your files, ready for what’s next."; case .packs: "Get your paperwork ready."; case .protection: "Keep saved changes automatically."; case .files: "Find the file you’re thinking of."; case .cloud: "Browse Google Drive and OneDrive directly."; case .organize: "A place for everything, with you in control."; case .history: "Keep the moments that matter."; case .vault: "An encrypted home for private files." } }
     }
     init(directory: URL? = nil, sharing owner: AppModel? = nil) {
         let folder = directory ?? owner?.storageDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("OpenFiles", isDirectory: true)
@@ -186,6 +188,7 @@ final class AppModel: ObservableObject {
         library = owner?.library ?? FileLibrary(directory: folder)
         vault = owner?.vault ?? EncryptedVault(directory: folder)
         packs = owner?.packs ?? DocumentPacksModel(directory: folder.appendingPathComponent("DocumentPacks", isDirectory: true))
+        collections = owner?.collections ?? CollectionsModel(directory: folder.appendingPathComponent("Collections", isDirectory: true))
         protection = owner?.protection ?? ProtectionModel(library: library, directory: folder)
         cleanup = owner?.cleanup ?? CleanupModel(library: library, directory: folder)
         systemSearch.onUpdate = { [weak self] urls, gathering, count in
@@ -241,6 +244,7 @@ final class AppModel: ObservableObject {
         await perform {
             self.state = try await self.library.load(hydrateVectors: false)
             await self.packs.load()
+            await self.collections.load()
             self.protection.onLibraryChange = { [weak self] state in self?.state = state }
             await self.protection.start()
             #if canImport(OpenFilesMLX)
