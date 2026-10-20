@@ -111,7 +111,7 @@ struct DocumentPacksView: View {
             HStack(alignment: .center, spacing: 14) {
                 if packs.busy { ProgressView().controlSize(.small) }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(attachments.count) files · \(unreviewed) to review · \(missing) required items missing").font(.callout.weight(.medium))
+                    Text("\(attachments.count) \(attachments.count == 1 ? "file" : "files") · \(unreviewed) to review · \(missing) required \(missing == 1 ? "item" : "items") missing").font(.callout.weight(.medium))
                     Text("Export rechecks reviewed files. Missing items are listed in the exported checklist.")
                         .font(.caption).foregroundStyle(.secondary)
                 }

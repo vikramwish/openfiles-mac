@@ -14,6 +14,7 @@ struct HomeView: View {
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14)], spacing: 14) {
                     action("Find something", detail: "A few words are enough. Search by name, topic, or date.", symbol: "magnifyingglass") { model.showSearch?() }
+                    action("Make room", detail: "Review exact duplicates and possible cleanup candidates.", symbol: "sparkles.rectangle.stack") { model.section = .cleanup }
                     action("Prepare documents", detail: "Gather a checklist of files, review them, and export copies.", symbol: "checklist") { model.section = .packs }
                     action("Recover a version", detail: "Browse saved versions and restore earlier work.", symbol: "clock.arrow.circlepath") { model.section = .history }
                 }
@@ -21,10 +22,10 @@ struct HomeView: View {
                     Text("What are you getting ready for?").font(.title2.weight(.semibold))
                     Text("Start with an editable checklist. Templates are suggestions; check the recipient’s requirements.")
                         .foregroundStyle(.secondary)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], spacing: 12) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
                         ForEach(DocumentPackTemplate.examples) { template in
                             Button { packs.create(template); model.section = .packs } label: {
-                                HStack { Image(systemName: "folder.badge.plus").foregroundStyle(.tint); Text(template.title); Spacer(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary) }
+                                HStack { Image(systemName: "folder.badge.plus").foregroundStyle(.tint); Text(template.title).lineLimit(2).fixedSize(horizontal: false, vertical: true); Spacer(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary) }
                                     .padding(14).frame(maxWidth: .infinity, alignment: .leading)
                             }.buttonStyle(.bordered).disabled(packs.busy)
                         }
@@ -74,9 +75,9 @@ struct HomeView: View {
         Button(action: perform) {
             VStack(alignment: .leading, spacing: 14) {
                 Image(systemName: symbol).font(.title).foregroundStyle(.tint)
-                Text(title).font(.title3.weight(.semibold))
-                Text(detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(title).font(.title3.weight(.semibold)).lineLimit(nil)
+                Text(detail).font(.callout).foregroundStyle(.secondary).lineLimit(nil).fixedSize(horizontal: false, vertical: true)
             }.frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading).padding(18).contentShape(Rectangle())
-        }.buttonStyle(.bordered)
+        }.buttonStyle(.bordered).multilineTextAlignment(.leading)
     }
 }
