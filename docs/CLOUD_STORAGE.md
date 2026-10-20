@@ -42,6 +42,14 @@ Successful sign-in immediately loads the account root. Provider shortcuts in the
 
 Storage indicators show the Mac's current volume and the connected account's quota. Google uses Drive `about.storageQuota` (account usage can include Gmail and Photos); OneDrive uses Graph `me/drive.quota`. These metadata calls use existing read permissions and do not download files. Refresh updates the listing and account quota independently, so unavailable quota data does not hide files. A missing or unlimited provider limit is shown as unavailable, never zero capacity. Local capacity refreshes every minute while visible and can differ from macOS's reclaimable-space estimate.
 
+The storage bar stays visible throughout the main window, including Home, with used/available/total values where reported. Home restores the selected provider's saved connection and shows up to eight items from the current folder, with files before folders. **View all** opens the full cloud browser for paging and transfers. This is a view of the selected provider and folder, not an account-wide document search.
+
+### File previews
+
+Select a supported file in the cloud browser or choose **Preview** on Home to download a private temporary copy for Quick Look. PDF, common image, text, and Office formats are supported. Metadata must report a size no greater than 25 MiB; the downloaded size and remote metadata are checked again before display. Unknown sizes, changed versions, unsupported formats, and larger files show an explanation with **Save copy…** or a provider link.
+
+Preview files are read-only, outside the local index and paired folders. Closing or replacing a preview, changing folders/accounts, or quitting cleans up its temporary copy. A process crash can leave temporary data for manual cleanup. **Save copy…** remains a separate permanent download to a location you choose. Google Workspace documents open on the provider's website.
+
 **Disconnect** removes the locally stored authorization and retains your registration fields in Keychain. It does not delete your cloud files or revoke the app's grant at the provider. To revoke provider-side access, use your [Google third-party connections](https://myaccount.google.com/connections) or Microsoft's account/application permission controls. To use a different account for a provider, disconnect and sign in again.
 
 ## Upload files
@@ -49,6 +57,12 @@ Storage indicators show the Mac's current volume and the connected account's quo
 After enabling write access and reconnecting, **Upload files…** sends selected regular files to the currently displayed cloud folder. Existing names are refused; choose another filename to upload a separate version. Google Drive can contain duplicate names, so a concurrent creation by another client may leave duplicate entries; sync reports that ambiguity instead of choosing one.
 
 New nonempty files upload in 5 MiB chunks. Temporary upload URLs and session identifiers remain in memory. The app does not persist a transfer queue or resume interrupted sessions across launches. Cancel or network failure can occur after the provider has committed a file; refresh the folder before retrying. Empty files use the providers' single-request upload paths.
+
+### Home suggestions
+
+**Suggested for cloud storage** ranks indexed local files by size. Candidates are at least 25 MiB, or at least 1 MiB with a modification date over 90 days ago. Project records, sensitive flags/names, and recognized `Library/CloudStorage` or `Library/Mobile Documents` paths are excluded. These are metadata heuristics, not a claim about how often a file is used or whether another cloud copy already exists.
+
+Choose the destination folder in Cloud documents, then **Review upload…**. The review displays the source, indexed size, destination, and disclosure that the current filename and contents will be transmitted. Account or folder changes invalidate an open review. Read-only connections must explicitly enable uploads and reconnect first. Confirming uploads a copy and reports the result; local originals are retained and no disk space is freed automatically. Verify the cloud copy before separately removing any original.
 
 ## Pair and sync folders
 
@@ -71,7 +85,9 @@ Sync behavior:
 | A previously synced file/folder is missing on one side | Report it for manual resolution; do not delete or automatically restore the missing copy. |
 | A file moves, a remote ID changes, or names collide by case | Report the ambiguity instead of choosing a copy. |
 
-Resolve competing edits manually, preserving a separate copy if needed, then preview again. For a deletion, restore the missing copy yourself or remove the counterpart yourself. Sync never deletes cloud files. Files removed from both sides remain absent. Native Google Workspace documents, shortcuts, and other nondownloadable cloud items are reported as unsupported for content sync.
+For competing files present on both sides, choose **Compare copies…** in the sync preview. The comparison shows sizes, dates, and text changes or side-by-side previews. Both files must have known sizes of at most 25 MiB. Text differences support UTF-8 without NUL bytes, up to 1 MiB and 2,000 lines per file; other contents use Quick Look previews. **Keep local copy** backs up the compared cloud bytes before a conditional upload. **Keep cloud copy** backs up the local file before replacement. Both choices revalidate the account, pairing, paths, revisions, and captured bytes; stale comparisons require a new preview. Canceling changes neither original and removes temporary comparison copies. Automatic sync pauses while reviewing a conflict and does not resume implicitly.
+
+Files outside these limits require manual comparison. For a deletion, restore the missing copy yourself or remove the counterpart yourself. Sync never deletes cloud files. Files removed from both sides remain absent. Native Google Workspace documents, shortcuts, and other nondownloadable cloud items are reported as unsupported for content sync.
 
 Hidden files/folders and symbolic links are excluded. Pairings are limited to 10,000 entries and 64 folder levels; exceeding these limits stops the scan rather than applying a partial inventory. Sync tracks file bytes and names, not complete filesystem metadata or permissions across providers. It does not infer renames as moves. Initial content comparisons can download files even when no replacement is needed.
 
@@ -80,7 +96,7 @@ Updates to existing remote files use a streamed conditional content request, not
 Sync state is stored in `~/Library/Application Support/OpenFiles/CloudSync/`:
 
 - `<pair-id>.json`: paired paths, provider account identifier, SHA-256 file fingerprints, remote IDs/revisions, and a schema/revision number. This is plaintext metadata and contains no OAuth tokens.
-- `Backups/<pair-id>/<operation-id>/`: verified copies of local files replaced by downloaded versions. These backups are **not encrypted** and have no automatic retention limit. **Show local backups** opens this folder. Review and remove old backups yourself when appropriate.
+- `Backups/<pair-id>/<operation-id>/`: verified copies of local files replaced by downloaded versions, and cloud copies replaced through explicit conflict resolution. These backups are **not encrypted** and have no automatic retention limit. **Show local backups** opens this folder. Review and remove old backups yourself when appropriate.
 - `Temporary/`: scratch copies during content comparison and upload. Completed and failed operations clean their own scratch folders; a process crash can leave scratch files for manual cleanup.
 
 If another process changes a file during final replacement, the error may identify a retained `.openfiles-previous-…` sibling for manual recovery. Such hidden recovery files are excluded from subsequent sync.
@@ -120,5 +136,9 @@ Before shipping, use disposable files and test accounts to check both providers:
 11. Reconnect a different account and confirm the old pairing refuses to transfer files. Confirm no remote files enter local indexing/history/organization merely by browsing.
 
 12. Open Cloud storage in two workspace windows. Confirm provider changes and transfer status agree, an active transfer cannot be started twice, and closing one window leaves the other’s transfer running. Enable automatic sync, close both windows, reopen a workspace, and confirm the same session is retained. Quit during a transfer and verify the next launch can reconcile the disposable pairing.
+13. On Home, browse cloud documents, preview a PDF/image/text file, close it, and confirm its temporary copy is removed. Test an unknown-size file, a file over 25 MiB, and a file changed while its preview downloads. Confirm local and cloud storage remain visible in the main window.
+14. Compare a disposable sync conflict, try each choice, and verify the replaced copy in backups. Change a file after comparison and confirm resolution refuses stale content. Cancel a binary comparison and verify both originals remain.
+15. Index disposable large/older files. Review a Home upload, confirm the displayed destination and retained local original, then repeat while switching the destination in another workspace. Confirm the stale review cannot upload.
+16. Select several local text files and review batch filenames. Apply a prefix/date pattern to selected rows, leave others unchecked, and verify contents and extensions after renaming. Test duplicate target names and a source edited after analysis; neither should start a partially validated batch.
 
 The app remains a locally signed developer build. Distribution needs a stable signing identity, appropriate provider registration/verification, and testing of Keychain access across updates.

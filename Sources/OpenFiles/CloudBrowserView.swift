@@ -22,16 +22,11 @@ struct CloudBrowserView: View {
                 }
             }
 
-            Text("Browse cloud files, save local copies, or enable uploads and sync. Pairing a folder authorizes transfers of its filenames and contents, including subfolders. Deletions remain manual; cloud browsing stays separate from local indexing.")
+            Text("Select a supported file to preview a temporary downloaded copy, or save a local copy. Pairing a folder authorizes transfers of its filenames and contents, including subfolders. Deletions remain manual.")
                 .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
             if !model.connected || model.showingRegistration { registration }
             if model.connected {
-                HStack(alignment: .top, spacing: 24) {
-                    StorageUsageView(title: model.provider == .googleDrive ? "Google account storage" : "OneDrive storage", usage: model.storageUsage, loading: model.loadingStorage, error: model.storageError)
-                    Spacer()
-                    VolumeStorageView(url: FileManager.default.homeDirectoryForCurrentUser)
-                }
                 if model.connectedForWriting {
                     DisclosureGroup("Uploads and folder sync", isExpanded: $showingSync) { syncControls.padding(.top, 8) }
                         .font(.callout)
@@ -47,7 +42,15 @@ struct CloudBrowserView: View {
                 }.font(.system(size: 12)).padding(12).background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
             }
 
-            if model.connected { browser.frame(minHeight: 200, maxHeight: .infinity) }
+            if model.connected {
+                HStack(spacing: 0) {
+                    browser.frame(minHeight: 200, maxHeight: .infinity)
+                    if let item = model.previewItem {
+                        Divider()
+                        CloudPreviewView(model: model, item: item).frame(width: 330)
+                    }
+                }
+            }
             else if model.loadingConfiguration { ProgressView("Reading saved connection…").frame(maxWidth: .infinity, maxHeight: .infinity) }
             else { disconnected }
 
@@ -73,29 +76,14 @@ struct CloudBrowserView: View {
         .onDisappear { model.deactivate() }
         .onChange(of: model.provider) { showingSync = false }
         .sheet(isPresented: Binding(get: { model.syncPlan != nil }, set: { if !$0 { model.dismissSyncPreview() } })) {
-            if let plan = model.syncPlan {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Review two-way sync").font(.title2)
-                    Text("\(plan.pair.localRoot.path) ↔ \(plan.pair.remoteFolderName)").font(.caption).textSelection(.enabled)
-                    Text("Changed files are rechecked before transfer. Local replacements retain backups. Conflicts are reported without overwriting either copy; deletions are never propagated.").font(.caption).foregroundStyle(.secondary)
-                    if plan.changes.isEmpty { Text("The paired folders are up to date.").padding() }
-                    List(plan.changes) { action in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(action.path).font(.headline)
-                            Text(action.kind.rawValue).foregroundStyle(action.kind == .conflict ? Color.orange : Color.secondary)
-                            if !action.detail.isEmpty { Text(action.detail).font(.caption).foregroundStyle(.secondary) }
-                        }
-                    }
-                    HStack { Spacer(); Button("Cancel") { model.dismissSyncPreview() }; Button("Apply sync") { model.applySync() }.buttonStyle(.borderedProminent).disabled(model.transferBusy || plan.changes.isEmpty) }
-                }.padding(24).frame(width: 640, height: 500)
-            }
+            if let plan = model.syncPlan { CloudSyncReviewView(model: model, plan: plan) }
         }
         .sheet(isPresented: $showingSyncReport) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Sync conflicts").font(.title2)
-                Text("Resolve competing edits manually, then preview again. For a missing file, restore it manually or remove it from both sides. Removing and recreating the pairing resets its baseline.").font(.caption)
+                Text("Choose Compare conflicts to inspect both versions and keep the desired copy. For a missing file, restore it manually or remove it from both sides. Removing and recreating the pairing resets its baseline.").font(.caption)
                 List(model.syncIssues, id: \.self) { Text($0).textSelection(.enabled) }
-                HStack { Button("Show local backups") { model.showSyncBackups() }; Spacer(); Button("Done") { showingSyncReport = false } }
+                HStack { Button("Compare conflicts…") { showingSyncReport = false; model.previewSync() }; Button("Show local backups") { model.showSyncBackups() }; Spacer(); Button("Done") { showingSyncReport = false } }
             }.padding(24).frame(width: 620, height: 440)
         }
     }
@@ -201,9 +189,13 @@ struct CloudBrowserView: View {
                     cloudRow(item)
                         .contentShape(Rectangle())
                         .onTapGesture(count: 2) { activate(item) }
+                        .onTapGesture { if CloudPreviewPolicy.supports(item) { model.preview(item) } }
                         .contextMenu {
                             if item.isFolder { Button("Open folder") { model.openFolder(item) } }
-                            else if item.canDownload { Button("Save copy…") { model.saveCopy(item) }.disabled(model.transferBusy) }
+                            else if item.canDownload {
+                                if CloudPreviewPolicy.supports(item) { Button("Preview") { model.preview(item) } }
+                                Button("Save copy…") { model.saveCopy(item) }.disabled(model.transferBusy)
+                            }
                             if item.webURL != nil { Button("Open in browser") { model.openOnWeb(item) } }
                         }
                 }.listStyle(.inset)
@@ -233,13 +225,14 @@ struct CloudBrowserView: View {
                 }
             }
             Spacer(minLength: 10)
-            FileLocationTag(location: model.currentLocation)
+            if model.previewItem == nil { FileLocationTag(location: model.currentLocation) }
             if let size = item.size, !item.isFolder {
                 Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file)).font(.system(size: 10)).foregroundStyle(.secondary).frame(width: 70, alignment: .trailing)
             }
-            if let modified = item.modified {
+            if let modified = item.modified, model.previewItem == nil {
                 Text(modified, style: .date).font(.system(size: 10)).foregroundStyle(.secondary).frame(width: 80, alignment: .trailing)
             }
+            if CloudPreviewPolicy.supports(item), model.previewItem == nil { Button("Preview") { model.preview(item) } }
             if item.isFolder { Button("Open") { model.openFolder(item) }.frame(width: 100) }
             else if item.canDownload { Button("Save copy…") { model.saveCopy(item) }.disabled(model.transferBusy).frame(width: 100) }
             else if item.webURL != nil { Button("Open in browser") { model.openOnWeb(item) }.frame(width: 100) }
@@ -257,6 +250,7 @@ struct CloudBrowserView: View {
 
     private func activate(_ item: CloudItem) {
         if item.isFolder { model.openFolder(item) }
+        else if CloudPreviewPolicy.supports(item) { model.preview(item) }
         else if item.canDownload { model.saveCopy(item) }
         else { model.openOnWeb(item) }
     }

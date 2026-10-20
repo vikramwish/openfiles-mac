@@ -13,6 +13,7 @@ struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @ViewState private var columns: NavigationSplitViewVisibility = .all
     @ViewState private var showsInspector = true
+    @ViewState private var inspectorHistory = false
     @ViewState private var focusSearchRequest = 0
     @ObservedObject var cloudModel: CloudBrowserModel
     var body: some View {
@@ -24,7 +25,7 @@ struct ContentView: View {
                 Group {
                     switch model.section {
                     case .cleanup: CleanupView(model: model.cleanup)
-                    case .home: HomeView(packs: model.packs)
+                    case .home: HomeView(packs: model.packs, cloud: cloudModel)
                     case .packs: DocumentPacksView(packs: model.packs)
                     case .protection: ProtectionView(model: model.protection, openHistory: { model.showVersionPanel(for: $0) })
                     case .files: files
@@ -34,6 +35,16 @@ struct ContentView: View {
                     case .vault: VaultView()
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                Divider()
+                HStack(alignment: .top, spacing: 24) {
+                    VolumeStorageView(url: model.section == .files ? model.currentFolder : FileManager.default.homeDirectoryForCurrentUser)
+                    Spacer()
+                    if cloudModel.connected {
+                        StorageUsageView(title: cloudModel.provider == .googleDrive ? "Google account storage" : "OneDrive storage", usage: cloudModel.storageUsage, loading: cloudModel.loadingStorage, error: cloudModel.storageError)
+                        Button { cloudModel.refreshStorageUsage() } label: { Image(systemName: "arrow.clockwise") }
+                            .buttonStyle(.borderless).help("Refresh cloud storage usage").accessibilityLabel("Refresh cloud storage usage")
+                    }
+                }.padding(.horizontal, 16).padding(.vertical, 8)
                 Divider()
                 HStack(spacing: 8) {
                     if model.section == .cloud {
@@ -62,7 +73,7 @@ struct ContentView: View {
             Button("Find") { focusSearchRequest += 1 }.keyboardShortcut("f").hidden()
         }
         .onChange(of: model.selectedURL) { if model.selectedURL != nil { showsInspector = true } }
-        .onChange(of: model.versionFocus) { showsInspector = true }
+        .onChange(of: model.versionFocus) { showsInspector = true; inspectorHistory = true }
         .alert("OpenFiles", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) { Button("OK") { model.error = nil } } message: { Text(model.error ?? "") }
         .sheet(isPresented: $model.showingIndexing) { IndexingView() }
         .sheet(isPresented: $model.showingGo) {
@@ -87,6 +98,7 @@ struct ContentView: View {
             }
         }
         .sheet(item: $model.renameItem) { item in RenameSuggestionView(item: item).environmentObject(model) }
+        .sheet(item: $model.batchRenameRequest) { request in BatchRenameView(request: request).environmentObject(model) }
     }
     private var sidebarSelection: Binding<String?> {
         Binding(get: {
@@ -155,14 +167,19 @@ struct ContentView: View {
             BrowserView().frame(minWidth: 420)
             if showsInspector, let item = model.selectedItem {
                 Divider()
-                if item.sensitive {
-                    VStack(spacing: 12) {
-                        Label("Version history unavailable", systemImage: "lock.shield")
-                        Text("Potentially sensitive files are excluded from history. Use the private vault.").font(.caption).foregroundStyle(.secondary)
-                    }.padding(20).frame(width: 280)
-                } else {
-                    VersionHistoryView(url: item.url).id(item.url).frame(width: 340)
-                }
+                VStack(spacing: 10) {
+                    Picker("File inspector", selection: $inspectorHistory) { Text("Preview").tag(false); Text("History").tag(true) }
+                        .pickerStyle(.segmented).padding(.horizontal, 12).padding(.top, 12)
+                    if !inspectorHistory {
+                        Text(item.name).font(.headline).lineLimit(2).padding(.horizontal, 12)
+                        HStack { FileLocationTag(location: .local(item.url)); Text(ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file)).font(.caption).foregroundStyle(.secondary) }
+                        if item.isFolder { ContentUnavailableView("Folder selected", systemImage: "folder", description: Text("Select a file to preview its contents.")) }
+                        else { FilePreview(url: item.url).id(item.url).frame(maxWidth: .infinity, maxHeight: .infinity) }
+                        Button("Open") { model.open(item) }.padding(.bottom, 12)
+                    } else if item.sensitive {
+                        ContentUnavailableView("Version history unavailable", systemImage: "lock.shield", description: Text("Potentially sensitive files are excluded from history."))
+                    } else { VersionHistoryView(url: item.url).id(item.url) }
+                }.frame(width: 340)
             }
         }
     }

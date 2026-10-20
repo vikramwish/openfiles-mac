@@ -18,6 +18,7 @@ public actor FileLibrary {
     var queryBackend: any EmbeddingBackend
     var embeddingGeneration = UUID()
     var renamePreviews: [UUID: RenamePreview] = [:]
+    var batchRenamePreviews: [UUID: BatchRenamePreview] = [:]
     private var queryCache: [String: [Double]] = [:]
     private var scanRunning = false
     private var control: IndexControl?
@@ -47,6 +48,7 @@ public actor FileLibrary {
         guard !scanRunning else { throw OpenFilesError.message("Stop indexing before changing the search model.") }
         embeddingFactory = factory; queryBackend = factory(); embeddingGeneration = UUID()
         renamePreviews.removeAll()
+        batchRenamePreviews.removeAll()
         queryCache.removeAll()
         var progress = IndexProgress()
         progress.engine = queryBackend.displayName; progress.engineID = queryBackend.identifier

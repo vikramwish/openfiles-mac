@@ -276,7 +276,109 @@ private func failedTransferAndCancellation() async throws {
     try verify(pairs.isEmpty && (try f.read("file.txt")) == "remote", "Removing a pairing removed local data")
 }
 
+private func temporaryCloudPreviews() async throws {
+    let f = try SyncFixture(); defer { f.clean() }
+    let store = CloudPreviewStore(directory: f.base.appendingPathComponent("Previews"))
+    let item = await f.remote.seed("../report.txt", text: "preview content")
+    let result = try await store.prepare(item, remote: f.remote)
+    try verify(result.url.lastPathComponent == "Preview.txt", "Remote filename became a local path")
+    try verify(try String(contentsOf: result.url, encoding: .utf8) == "preview content", "Wrong preview contents")
+    try verify(try FileManager.default.contentsOfDirectory(atPath: f.local.path).isEmpty, "Preview entered the paired folder")
+    let mode = try FileManager.default.attributesOfItem(atPath: result.url.path)[.posixPermissions] as? NSNumber
+    try verify(mode?.intValue == 0o400, "Preview must be read-only")
+    await store.discard(result.id)
+    try verify(!FileManager.default.fileExists(atPath: result.url.path), "Closed preview remained on disk")
+    let next = try await store.prepare(item, remote: f.remote)
+    await store.clear()
+    try verify(!FileManager.default.fileExists(atPath: next.url.path), "Session cleanup retained preview content")
+    let unsupported = await f.remote.seed("program.exe", text: "unsupported")
+    try await rejects { _ = try await store.prepare(unsupported, remote: f.remote) }
+}
+
+private func staleAndCancelledPreviews() async throws {
+    let f = try SyncFixture(); defer { f.clean() }
+    let folder = f.base.appendingPathComponent("Previews"), store = CloudPreviewStore(directory: folder)
+    let item = await f.remote.seed("report.txt", text: "old")
+    await f.remote.hookDownload { await f.remote.edit(item.id, text: "new") }
+    try await rejects { _ = try await store.prepare(item, remote: f.remote) }
+    await f.remote.hookDownload { await store.clear() }
+    try await rejects { _ = try await store.prepare(item, remote: f.remote) }
+    await f.remote.hookDownload { throw CloudError.serviceUnavailable(503) }
+    try await rejects { _ = try await store.prepare(item, remote: f.remote) }
+    try verify(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty, "Failed previews retained content")
+    let large = await f.remote.seed("large.pdf", text: String(repeating: "x", count: Int(CloudPreviewPolicy.maximumBytes) + 1))
+    try await rejects { _ = try await store.prepare(large, remote: f.remote) }
+}
+
+private func compareAndResolveCopies() async throws {
+    for keepLocal in [true, false] {
+        let f = try SyncFixture(); defer { f.clean() }
+        try f.write("report.txt", "shared\nlocal line")
+        let remote = await f.remote.seed("report.txt", text: "shared\ncloud line")
+        let pair = try await f.pair(), plan = try await f.engine.preview(pair, remote: f.remote)
+        let comparison = try await f.engine.compare(plan, path: "report.txt", remote: f.remote)
+        try verify(comparison.text?.changes.count == 2, "Expected removed and added text lines")
+        try verify(try f.read("report.txt") == "shared\nlocal line", "Comparison changed the local file")
+        let before = await f.remote.contents(remote.id); try verify(before == "shared\ncloud line", "Comparison changed the remote file")
+        let report = try await f.engine.resolveComparison(comparison.id, choice: keepLocal ? .keepLocal : .keepCloud, remote: f.remote)
+        let expected = keepLocal ? "shared\nlocal line" : "shared\ncloud line"
+        let actualRemote = await f.remote.contents(remote.id)
+        try verify(try f.read("report.txt") == expected && actualRemote == expected, "Choice did not converge both copies")
+        try verify(report.backups.count == 1, "Replaced content was not backed up")
+        let backup = try String(contentsOf: report.backups[0], encoding: .utf8)
+        try verify(backup == (keepLocal ? "shared\ncloud line" : "shared\nlocal line"), "Wrong replaced copy backed up")
+        let next = try await f.engine.preview(pair, remote: f.remote)
+        try verify(next.changes.isEmpty, "Resolved conflict did not update the baseline")
+        try verify(!FileManager.default.fileExists(atPath: comparison.cloudURL.path), "Consumed comparison retained temporary content")
+        try await rejects { _ = try await f.engine.resolveComparison(comparison.id, choice: .keepCloud, remote: f.remote) }
+    }
+}
+
+private func comparisonRevalidatesOriginals() async throws {
+    for change in ["local", "remote", "account", "parent", "snapshot"] {
+        let f = try SyncFixture(); defer { f.clean() }
+        try f.write("report.txt", "local version")
+        let item = await f.remote.seed("report.txt", text: "cloud version")
+        let pair = try await f.pair(), plan = try await f.engine.preview(pair, remote: f.remote)
+        let comparison = try await f.engine.compare(plan, path: "report.txt", remote: f.remote)
+        switch change {
+        case "local": try f.write("report.txt", "new local edit")
+        case "remote": await f.remote.edit(item.id, text: "new cloud edit")
+        case "account": await f.remote.setAccount("other-account")
+        case "parent":
+            let folder = await f.remote.seed("Elsewhere"); await f.remote.move(item.id, to: folder.id)
+        default:
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: comparison.localURL.path)
+            try Data("tampered snapshot".utf8).write(to: comparison.localURL)
+        }
+        try await rejects { _ = try await f.engine.resolveComparison(comparison.id, choice: .keepLocal, remote: f.remote) }
+        let remoteText = await f.remote.contents(item.id)
+        try verify(remoteText == (change == "remote" ? "new cloud edit" : "cloud version"), "A stale comparison overwrote remote content")
+        try verify(try f.read("report.txt") == (change == "local" ? "new local edit" : "local version"), "A stale comparison overwrote local content")
+    }
+}
+
+private func comparisonCleanupAndBinary() async throws {
+    let f = try SyncFixture(); defer { f.clean() }
+    try f.write("report.pdf", "binary\0local")
+    _ = await f.remote.seed("report.pdf", text: "binary\0cloud")
+    let pair = try await f.pair(), plan = try await f.engine.preview(pair, remote: f.remote)
+    let comparison = try await f.engine.compare(plan, path: "report.pdf", remote: f.remote)
+    try verify(comparison.text == nil, "Binary contents were presented as text differences")
+    await f.engine.discardComparison(comparison.id)
+    try verify(!FileManager.default.fileExists(atPath: comparison.localURL.path), "Closing comparison retained its snapshot")
+    await f.remote.hookDownload { try f.write("report.pdf", "changed during comparison") }
+    try await rejects { _ = try await f.engine.compare(plan, path: "report.pdf", remote: f.remote) }
+    let temporary = f.state.appendingPathComponent("Temporary")
+    try verify(try FileManager.default.contentsOfDirectory(atPath: temporary.path).isEmpty, "Failed comparison leaked temporary copies")
+}
+
 let syncScenarios: [(String, () async throws -> Void)] = [
+    ("Cloud previews use private temporary copies and clean up", temporaryCloudPreviews),
+    ("Changed, cancelled, failed, and oversized previews are refused", staleAndCancelledPreviews),
+    ("Conflict comparison resolves either choice with retained backups", compareAndResolveCopies),
+    ("Conflict resolution revalidates original files, accounts, parents, and snapshots", comparisonRevalidatesOriginals),
+    ("Binary comparison and cancelled review preserve files and clean up", comparisonCleanupAndBinary),
     ("Recursive two-way sync persists its baseline", recursiveSync),
     ("One-sided edits sync with retained local backups", oneSidedEdits),
     ("Divergent edits preserve both copies", divergedEdits),

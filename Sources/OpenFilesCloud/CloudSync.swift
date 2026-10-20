@@ -51,6 +51,8 @@ public actor CloudSyncEngine {
     private let digest: @Sendable (URL) throws -> String
     private let fm = FileManager.default
     private var running = false
+    private var comparisons: [UUID: StoredComparison] = [:]
+    private var comparisonGeneration = UUID()
 
     public init(directory: URL, digest: @escaping @Sendable (URL) throws -> String) {
         self.directory = directory.standardizedFileURL.resolvingSymlinksInPath()
@@ -241,6 +243,111 @@ public actor CloudSyncEngine {
             }
         }
         return report
+    }
+
+    public func compare(_ plan: CloudSyncPlan, path: String, remote: any CloudSyncRemote) async throws -> CloudConflictComparison {
+        try begin(); defer { running = false }
+        let generation = comparisonGeneration
+        guard comparisons.count < 8 else { throw CloudSyncError.message("Close an existing comparison before opening another.") }
+        let state = try load(plan.pair)
+        guard state.revision == plan.revision,
+              let action = plan.actions.first(where: { $0.path == path }),
+              action.kind == .compare || action.kind == .conflict,
+              let localDigest = action.localDigest, let item = action.remote,
+              !item.isFolder, item.canDownload, item.revision != nil else {
+            throw CloudSyncError.message("Preview sync again. Comparison needs a regular file on both sides with a cloud revision.")
+        }
+        try await validate(plan.pair, remote: remote)
+        let target = try localURL(path, root: plan.pair.localRoot)
+        try checkLocal(target, expected: localDigest)
+        try CloudPreviewPolicy.checkFile(target); try CloudPreviewPolicy.checkSize(item.size)
+        let values = try target.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        _ = try await comparisonParent(plan, action: action, remote: remote)
+        let latest = try await checkedRemote(item, remote: remote)
+        let folder = try scratchDirectory()
+        var retained = false
+        defer { if !retained { try? fm.removeItem(at: folder) } }
+        let left = folder.appendingPathComponent("Local" + CloudPreviewPolicy.suffix(item.name))
+        let right = folder.appendingPathComponent("Cloud" + CloudPreviewPolicy.suffix(item.name))
+        try fm.copyItem(at: target, to: left)
+        try checkLocal(left, expected: localDigest)
+        try await remote.download(latest, to: right)
+        try CloudPreviewPolicy.checkFile(right)
+        _ = try await checkedRemote(latest, remote: remote)
+        try await validate(plan.pair, remote: remote)
+        _ = try await comparisonParent(plan, action: action, remote: remote)
+        _ = try localURL(path, root: plan.pair.localRoot)
+        try checkLocal(target, expected: localDigest)
+        let remoteDigest = try digest(right)
+        let text = try CloudTextComparison.read(local: left, cloud: right)
+        try Task.checkCancellation()
+        guard generation == comparisonGeneration else { throw CancellationError() }
+        for url in [left, right] { try fm.setAttributes([.posixPermissions: 0o400], ofItemAtPath: url.path) }
+        let comparison = CloudConflictComparison(id: UUID(), path: path, localURL: left, cloudURL: right,
+            localSize: Int64(values.fileSize ?? 0), localModified: values.contentModificationDate, remote: latest, text: text)
+        comparisons[comparison.id] = StoredComparison(plan: plan, action: action, value: comparison, cloudDigest: remoteDigest, folder: folder)
+        retained = true
+        return comparison
+    }
+
+    /// Explicit selection is separate from automatic sync. Both originals are revalidated before replacement.
+    public func resolveComparison(_ id: UUID, choice: CloudConflictChoice, remote: any CloudSyncRemote) async throws -> CloudSyncReport {
+        try begin(); defer { running = false }
+        guard let stored = comparisons.removeValue(forKey: id) else { throw CloudSyncError.message("This comparison has expired. Compare the files again.") }
+        defer { try? fm.removeItem(at: stored.folder) }
+        let plan = stored.plan, pair = plan.pair, action = stored.action, value = stored.value
+        var state = try load(pair)
+        guard state.revision == plan.revision else { throw CloudSyncError.message("Sync changed after comparison. Preview again.") }
+        try await validate(pair, remote: remote)
+        let parent = try await comparisonParent(plan, action: action, remote: remote)
+        let latest = try await checkedRemote(value.remote, remote: remote)
+        let target = try localURL(action.path, root: pair.localRoot)
+        try checkLocal(target, expected: action.localDigest)
+        try checkLocal(value.localURL, expected: action.localDigest)
+        try checkLocal(value.cloudURL, expected: stored.cloudDigest)
+        try Task.checkCancellation()
+        var report = CloudSyncReport()
+        switch choice {
+        case .keepCloud:
+            if let backup = try install(value.cloudURL, at: target, expected: action.localDigest, pair: pair, path: action.path) { report.backups.append(backup) }
+            state.files[action.path] = Baseline(digest: stored.cloudDigest, remoteID: latest.id, remoteRevision: latest.revision!)
+        case .keepLocal:
+            let backupFolder = directory.appendingPathComponent("Backups/\(pair.id)/\(UUID())")
+            try fm.createDirectory(at: backupFolder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let backup = backupFolder.appendingPathComponent("Cloud" + CloudPreviewPolicy.suffix(latest.name))
+            try fm.copyItem(at: value.cloudURL, to: backup)
+            try checkLocal(backup, expected: stored.cloudDigest)
+            let uploaded = try await remote.upload(value.localURL, folderID: parent, name: latest.name, replacing: latest)
+            guard uploaded.id == latest.id, uploaded.name == latest.name, let revision = uploaded.revision else { throw CloudError.invalidResponse }
+            state.files[action.path] = Baseline(digest: action.localDigest!, remoteID: uploaded.id, remoteRevision: revision)
+            report.backups.append(backup)
+        }
+        state.revision += 1; try save(state)
+        report.transferred = 1
+        return report
+    }
+
+    public func discardComparison(_ id: UUID) {
+        if let value = comparisons.removeValue(forKey: id) { try? fm.removeItem(at: value.folder) }
+    }
+    public func clearComparisons() {
+        comparisonGeneration = UUID()
+        for value in comparisons.values { try? fm.removeItem(at: value.folder) }
+        comparisons.removeAll()
+    }
+
+    private func comparisonParent(_ plan: CloudSyncPlan, action: CloudSyncAction, remote: any CloudSyncRemote) async throws -> String {
+        var directories = Dictionary(uniqueKeysWithValues: plan.actions.compactMap { action -> (String, String)? in
+            guard let item = action.remote, item.isFolder else { return nil }; return (action.path, item.id)
+        })
+        directories[""] = plan.pair.remoteFolderID
+        let path = (action.path as NSString).deletingLastPathComponent
+        guard let parent = directories[path], let expected = action.remote else { throw CloudError.invalidResponse }
+        try await validateRemoteParent(path, directories: directories, rootID: plan.pair.remoteFolderID, remote: remote)
+        guard try await children(parent, remote: remote).contains(where: { $0.id == expected.id && $0.name == expected.name }) else {
+            throw CloudError.conflict("The cloud item moved after the preview.")
+        }
+        return parent
     }
 
     private func checkedRemote(_ expected: CloudItem, remote: any CloudSyncRemote) async throws -> CloudItem {
@@ -435,6 +542,13 @@ public actor CloudSyncEngine {
 }
 
 private struct LocalEntry { let folder: Bool; let supported: Bool; let digest: String? }
+private struct StoredComparison {
+    let plan: CloudSyncPlan
+    let action: CloudSyncAction
+    let value: CloudConflictComparison
+    let cloudDigest: String
+    let folder: URL
+}
 private struct Baseline: Codable { let digest: String; let remoteID: String; let remoteRevision: String }
 private struct SyncState: Codable {
     var schema = 1

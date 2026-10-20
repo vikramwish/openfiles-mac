@@ -4,6 +4,7 @@ import OpenFilesCore
 struct HomeView: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var packs: DocumentPacksModel
+    @ObservedObject var cloud: CloudBrowserModel
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
@@ -18,6 +19,7 @@ struct HomeView: View {
                     action("Prepare documents", detail: "Gather a checklist of files, review them, and export copies.", symbol: "checklist") { model.section = .packs }
                     action("Recover a version", detail: "Browse saved versions and restore earlier work.", symbol: "clock.arrow.circlepath") { model.section = .history }
                 }
+                HomeCloudView(cloud: cloud)
                 VStack(alignment: .leading, spacing: 14) {
                     Text("What are you getting ready for?").font(.title2.weight(.semibold))
                     Text("Start with an editable checklist. Templates are suggestions; check the recipient’s requirements.")

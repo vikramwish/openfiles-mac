@@ -17,6 +17,7 @@ final class CloudBrowserModel: ObservableObject {
     @Published var writeAccess = false
     @Published private(set) var connectedForWriting = false
     @Published private(set) var uploading = false
+    @Published private(set) var uploadSummary: String?
     @Published private(set) var syncing = false
     @Published private(set) var syncPair: CloudSyncPair?
     @Published private(set) var syncPlan: CloudSyncPlan?
@@ -36,6 +37,18 @@ final class CloudBrowserModel: ObservableObject {
     @Published private(set) var error: String?
     @Published private(set) var status = "Connect an account to browse its files."
     @Published private(set) var downloadedURL: URL?
+    @Published private(set) var previewItem: CloudItem?
+    @Published private(set) var cloudPreview: CloudPreview?
+    @Published private(set) var previewError: String?
+    @Published private(set) var previewLoading = false
+    private let previewStore = CloudPreviewStore()
+    private var previewTask: Task<Void, Never>?
+    private var previewGeneration = UUID()
+    @Published private(set) var conflictComparison: CloudConflictComparison?
+    @Published private(set) var comparisonError: String?
+    @Published private(set) var comparingConflict = false
+    @Published private(set) var resolvingConflict = false
+    private var comparisonGeneration = UUID()
     @Published private(set) var storageUsage: StorageUsage?
     @Published private(set) var storageError: String?
     @Published private(set) var loadingStorage = false
@@ -59,6 +72,12 @@ final class CloudBrowserModel: ObservableObject {
     private var accountGeneration = UUID()
     private var listingGeneration = UUID()
     private var downloadGeneration = UUID()
+    private let allowsConnections: Bool
+
+    init(allowsConnections: Bool = true) { self.allowsConnections = allowsConnections }
+
+    // A reviewed destination becomes invalid when the account or folder changes.
+    var uploadDestinationID: String { "\(accountGeneration.uuidString)/\(provider.rawValue)/\(folders.last?.id ?? "root")" }
 
     var transferBusy: Bool { uploading || syncing || downloading }
     var connectionBusy: Bool { loadingConfiguration || authenticating || disconnecting }
@@ -69,6 +88,7 @@ final class CloudBrowserModel: ObservableObject {
     private var activeBrowsers = 0
 
     func activate() {
+        guard allowsConnections else { return }
         activeBrowsers += 1
         guard activeBrowsers == 1, !transferBusy, !connectionBusy else { return }
         loadSyncPair()
@@ -80,6 +100,7 @@ final class CloudBrowserModel: ObservableObject {
         guard provider != value, !disconnecting else { return }
         cancelActiveWork()
         provider = value; connected = false; connectedForWriting = false; client = nil
+        storageUsage = nil; storageError = nil
         clientID = ""; clientSecret = ""; writeAccess = false; showingRegistration = true
         syncPair = nil; syncPlan = nil; syncIssues = []; loadSyncPair()
         clearListing(); downloadedURL = nil
@@ -88,6 +109,7 @@ final class CloudBrowserModel: ObservableObject {
     }
 
     private func loadConfiguration() {
+        guard allowsConnections else { return }
         configurationTask?.cancel()
         accountGeneration = UUID()
         let generation = accountGeneration, selectedProvider = provider
@@ -117,6 +139,7 @@ final class CloudBrowserModel: ObservableObject {
     }
 
     func connect() {
+        guard allowsConnections else { return }
         guard !connectionBusy, !transferBusy else { return }
         let id = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty else { error = "Enter the client ID from your app registration."; return }
@@ -130,6 +153,7 @@ final class CloudBrowserModel: ObservableObject {
         let pendingListing = listingTask, pendingDownload = downloadTask
         let pendingUpload = uploadTask, pendingSync = syncTask
         connected = false; clearListing(); error = nil; authenticating = true
+        storageUsage = nil; storageError = nil
         status = "Complete sign-in in your browser."
         authenticationTask = Task {
             defer { if accountGeneration == generation { authenticating = false } }
@@ -167,6 +191,7 @@ final class CloudBrowserModel: ObservableObject {
         let pendingListing = listingTask, pendingDownload = downloadTask
         let pendingUpload = uploadTask, pendingSync = syncTask
         connected = false; connectedForWriting = false; clearListing(); downloadedURL = nil; error = nil
+        storageUsage = nil; storageError = nil
         disconnecting = true; status = "Disconnecting…"
         configurationTask = Task {
             defer { if accountGeneration == generation { disconnecting = false } }
@@ -198,7 +223,7 @@ final class CloudBrowserModel: ObservableObject {
     func goToFolder(at index: Int) { folders = Array(folders.prefix(index + 1)); loadPage(append: false) }
 
     func refresh() { loadPage(append: false); refreshStorageUsage() }
-    private func refreshStorageUsage() {
+    func refreshStorageUsage() {
         guard connected, let client else { return }
         storageTask?.cancel(); storageGeneration = UUID()
         let generation = storageGeneration, account = accountGeneration
@@ -224,7 +249,7 @@ final class CloudBrowserModel: ObservableObject {
         let generation = listingGeneration, account = accountGeneration
         let folder = folders.last?.id, token = append ? nextPageToken : nil
         loading = true; error = nil
-        if !append { items = []; nextPageToken = nil }
+        if !append { dismissCloudPreview(); items = []; nextPageToken = nil }
         listingTask = Task {
             defer { if listingGeneration == generation { loading = false } }
             do {
@@ -303,10 +328,11 @@ final class CloudBrowserModel: ObservableObject {
 
     /// Let cancelled transfers finish their cleanup/checkpoints before the process exits.
     func shutdown() async {
-        let pending = [uploadTask, syncTask, downloadTask, configurationTask, authenticationTask, listingTask, storageTask]
+        let pending = [uploadTask, syncTask, downloadTask, configurationTask, authenticationTask, listingTask, storageTask, previewTask]
         cancelActiveWork()
         for task in pending { await task?.value }
         await authenticationCleanupTask?.value
+        await previewStore.clear(); await syncEngine.clearComparisons()
     }
 
     private func handleExpiredConnection(_ error: Error) {
@@ -318,7 +344,9 @@ final class CloudBrowserModel: ObservableObject {
     }
 
     func cancelActiveWork() {
-        storageTask?.cancel(); storageGeneration = UUID(); loadingStorage = false; storageUsage = nil; storageError = nil
+        uploadSummary = nil
+        dismissCloudPreview(); dismissConflictComparison()
+        storageTask?.cancel(); storageGeneration = UUID(); loadingStorage = false
         uploadTask?.cancel(); syncTask?.cancel(); automaticTask?.cancel(); automaticSync = false
         uploading = false; syncing = false; syncPlan = nil
         let wasAuthenticating = authenticating, activeClient = client, pendingSignIn = authenticationTask
@@ -337,16 +365,86 @@ final class CloudBrowserModel: ObservableObject {
     }
 
     private func clearListing() { items = []; folders = []; nextPageToken = nil }
+
+    func preview(_ item: CloudItem) {
+        guard connected, let client else { return }
+        dismissCloudPreview()
+        previewItem = item; previewLoading = true; previewError = nil
+        let generation = previewGeneration, account = accountGeneration
+        previewTask = Task {
+            defer { if previewGeneration == generation { previewLoading = false } }
+            do {
+                let result = try await previewStore.prepare(item, remote: client)
+                guard !Task.isCancelled, generation == previewGeneration, account == accountGeneration else {
+                    await previewStore.discard(result.id); return
+                }
+                cloudPreview = result
+            } catch is CancellationError { }
+            catch { if generation == previewGeneration, account == accountGeneration { previewError = error.localizedDescription } }
+        }
+    }
+    func dismissCloudPreview() {
+        previewTask?.cancel(); previewGeneration = UUID()
+        if let value = cloudPreview { Task { await previewStore.discard(value.id) } }
+        previewItem = nil; cloudPreview = nil; previewError = nil; previewLoading = false
+    }
+
+    func compareConflict(_ plan: CloudSyncPlan, path: String) {
+        guard connected, !transferBusy, let client else { return }
+        setAutomaticSync(false); dismissConflictComparison()
+        let account = accountGeneration, generation = comparisonGeneration
+        comparingConflict = true; syncing = true; comparisonError = nil
+        syncTask = Task {
+            defer { if account == accountGeneration, generation == comparisonGeneration { comparingConflict = false; syncing = false } }
+            do {
+                let result = try await syncEngine.compare(plan, path: path, remote: client)
+                guard !Task.isCancelled, account == accountGeneration, generation == comparisonGeneration else { await syncEngine.discardComparison(result.id); return }
+                conflictComparison = result
+            } catch is CancellationError { }
+            catch { if account == accountGeneration, generation == comparisonGeneration { comparisonError = error.localizedDescription } }
+        }
+    }
+    func resolveConflict(_ choice: CloudConflictChoice) {
+        guard !transferBusy, let comparison = conflictComparison, let client else { return }
+        let account = accountGeneration, generation = comparisonGeneration
+        resolvingConflict = true; syncing = true; comparisonError = nil
+        syncTask = Task {
+            defer { if account == accountGeneration, generation == comparisonGeneration { resolvingConflict = false; syncing = false } }
+            do {
+                let report = try await syncEngine.resolveComparison(comparison.id, choice: choice, remote: client)
+                guard !Task.isCancelled, account == accountGeneration, generation == comparisonGeneration else { return }
+                conflictComparison = nil; syncPlan = nil
+                presentSyncReport(report)
+                status = "Conflict resolved. The replaced copy is retained in local sync backups. Preview sync again for remaining conflicts."
+            } catch is CancellationError { }
+            catch { if account == accountGeneration, generation == comparisonGeneration { conflictComparison = nil; comparisonError = error.localizedDescription } }
+        }
+    }
+    func dismissConflictComparison() {
+        comparisonGeneration = UUID()
+        if comparingConflict || resolvingConflict { syncTask?.cancel(); syncing = false }
+        if let comparison = conflictComparison { Task { await syncEngine.discardComparison(comparison.id) } }
+        conflictComparison = nil; comparisonError = nil; comparingConflict = false; resolvingConflict = false
+    }
 }
 
 extension CloudBrowserModel {
     func uploadFiles() {
-        guard connected, connectedForWriting, !transferBusy, let client else { return }
+        guard connected, connectedForWriting, !transferBusy else { return }
         let panel = NSOpenPanel(); panel.title = "Upload files to \(currentFolderName)"
         panel.message = "Selected filenames and file contents will be sent to \(provider.displayName). Existing cloud files will not be replaced."
         panel.canChooseDirectories = false; panel.canChooseFiles = true; panel.allowsMultipleSelection = true
         guard panel.runModal() == .OK else { return }
-        let sources = panel.urls, folderID = folders.last?.id, account = accountGeneration
+        upload(panel.urls, reviewedDestination: uploadDestinationID)
+    }
+
+    func upload(_ sources: [URL], reviewedDestination: String) {
+        guard connected, connectedForWriting, !transferBusy, !sources.isEmpty, let client else { return }
+        guard reviewedDestination == uploadDestinationID else {
+            error = "The cloud destination changed. Review the destination again before uploading."; return
+        }
+        let folderID = folders.last?.id, account = accountGeneration
+        uploadSummary = nil
         uploading = true; error = nil; syncPlan = nil
         uploadTask = Task {
             defer { if accountGeneration == account { uploading = false } }
@@ -362,8 +460,9 @@ extension CloudBrowserModel {
             }
             guard accountGeneration == account else { return }
             status = "Uploaded \(completed) of \(sources.count) files." + (Task.isCancelled ? " Check the cloud folder before retrying a cancelled transfer." : "")
-            if !failures.isEmpty { error = failures.joined(separator: "\n") }
+            uploadSummary = status + " Local originals are still on your Mac." + (failures.isEmpty ? "" : "\n" + failures.joined(separator: "\n"))
             refresh()
+            if !failures.isEmpty { error = failures.joined(separator: "\n") }
         }
     }
 
