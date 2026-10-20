@@ -1,5 +1,6 @@
 import SwiftUI
 import OpenFilesCore
+import OpenFilesCloud
 
 // Type-context alias keeps the property wrapper unambiguous on newer SDKs.
 private typealias ViewState<Value> = SwiftUI.State<Value>
@@ -42,10 +43,15 @@ struct ContentView: View {
                         if model.busy { ProgressView().controlSize(.mini) }
                         Text(model.status).lineLimit(1).help(model.status)
                     }
+
                     Spacer(minLength: 16)
-                    Button { model.showingIndexing = true } label: {
-                        Label(model.indexing ? "\(model.indexProgress.processed) of \(model.indexProgress.discovered) indexed" : "Indexing Activity", systemImage: model.indexSettings.paused ? "pause.circle" : "waveform.path")
-                    }.buttonStyle(.borderless).help("View indexing progress and controls")
+                    if model.section != .cloud {
+                        Button { model.showingIndexing = true } label: {
+                            Label(model.indexing ? "\(model.indexProgress.processed) of \(model.indexProgress.discovered) indexed" : "Indexing Activity", systemImage: model.indexSettings.paused ? "pause.circle" : "waveform.path")
+                        }.buttonStyle(.borderless).help("View indexing progress and controls")
+                    } else {
+                        Text("CLOUD STORAGE").font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1)
+                    }
                 }.font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.vertical, 8)
             }.background(Color(nsColor: .textBackgroundColor))
         }
@@ -80,9 +86,11 @@ struct ContentView: View {
                 FilePreview(url: item.url).frame(minWidth: 640, minHeight: 460)
             }
         }
+        .sheet(item: $model.renameItem) { item in RenameSuggestionView(item: item).environmentObject(model) }
     }
     private var sidebarSelection: Binding<String?> {
         Binding(get: {
+            if model.section == .cloud { return "provider:" + cloudModel.provider.rawValue }
             if model.section == .files {
                 let current = model.currentFolder.standardizedFileURL
                 if model.locations.contains(where: { $0.url.standardizedFileURL == current }) ||
@@ -93,7 +101,10 @@ struct ContentView: View {
             return model.section.rawValue
         }, set: { value in
             guard let value else { return }
-            if let section = AppModel.Section(rawValue: value) { model.section = section }
+            if value.hasPrefix("provider:"), let provider = CloudProvider(rawValue: String(value.dropFirst(9))) {
+                cloudModel.selectProvider(provider); model.section = .cloud
+            }
+            else if let section = AppModel.Section(rawValue: value) { model.section = section }
             else if let url = URL(string: value) { model.navigate(to: url) }
         })
     }
@@ -109,6 +120,11 @@ struct ContentView: View {
                 ForEach(model.locations, id: \.url) { location in
                     Label(location.name, systemImage: location.icon).tag(location.url.absoluteString)
                         .help(location.url.path)
+                }
+            }
+            Section("Cloud storage") {
+                ForEach(CloudProvider.allCases) { provider in
+                    Label(provider.displayName, systemImage: "cloud").tag("provider:" + provider.rawValue)
                 }
             }
             if !model.volumes.isEmpty || FileManager.default.fileExists(atPath: cloudFolder.path) {
