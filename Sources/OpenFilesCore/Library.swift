@@ -153,7 +153,7 @@ public actor FileLibrary {
         let plan = NavigationQuery(input)
         guard !plan.isEmpty else { return [] }
         if plan.topic.terms.isEmpty { return searchCatalog.matches(input) }
-        let q = plan.topic.text
+        let q = IndexText.prepare(input)
         let backend = queryBackend, generation = embeddingGeneration
         let vector: [Double]?
         if let cached = queryCache[q] { vector = cached }
