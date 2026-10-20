@@ -57,7 +57,11 @@ actor IndexWorker {
             if !record.sensitive && !item.project {
                 let start = Date()
                 do { text = try IndexText.extract(item.url, size: item.stamp.size) }
-                catch { retryable = true; text.detail = "Filename only: content could not be read; retry on next pass" }
+                catch {
+                    retryable = true
+                    let failure = error as NSError
+                    text.detail = "Filename only: content could not be read (\(failure.domain) \(failure.code)); retry on next pass"
+                }
                 result.extractionSeconds = Date().timeIntervalSince(start); result.extracted = text.read; result.bytes = text.bytes
                 retryable = retryable || text.detail.contains("cloud file") || text.detail.contains("locked or unreadable")
                 record.sensitive = FileRules.sensitive(text.text)

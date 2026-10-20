@@ -58,6 +58,14 @@ struct Runner {
             print("\(PhotoSimilarityChecks.scenarios.count) photo similarity scenarios; \(log.failures) failures")
             exit(log.failures == 0 ? 0 : 1)
         }
+        if CommandLine.arguments.contains("--images") {
+            for (name, scenario) in ImageContentChecks.scenarios {
+                let previous = log.failures
+                do { try await scenario() } catch { failCheck("\(name): \(error.localizedDescription)") }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            exit(log.failures == 0 ? 0 : 1)
+        }
         if CommandLine.arguments.contains("--organization") {
             for (name, check) in OrganizationChecks.scenarios + DynamicMacChecks.scenarios {
                 let previous = log.failures
