@@ -204,6 +204,7 @@ final class SearchPanelController: NSObject, NSWindowDelegate {
     private let panel: SearchPanel
     private let shortcut = GlobalSearchShortcut()
     private let model: AppModel
+    private let cloudModel = CloudBrowserModel()
     private var workspaces: [ObjectIdentifier: (window: NSWindow, model: AppModel)] = [:]
     private weak var lastWorkspace: NSWindow?
     var activeWorkspaceChanged: ((AppModel?) -> Void)?
@@ -276,7 +277,7 @@ final class SearchPanelController: NSObject, NSWindowDelegate {
         window.minSize = NSSize(width: 980, height: 680); window.isReleasedWhenClosed = false
         window.delegate = self
         window.tabbingMode = .disallowed
-        window.contentView = NSHostingView(rootView: ContentView().environmentObject(workspace))
+        window.contentView = NSHostingView(rootView: ContentView(cloudModel: cloudModel).environmentObject(workspace))
         workspace.showWorkspace = { [weak window] in
             guard let window else { return }
             if window.isMiniaturized { window.deminiaturize(nil) }
@@ -318,9 +319,10 @@ final class SearchPanelController: NSObject, NSWindowDelegate {
         previewWindow?.contentView = NSHostingView(rootView: FilePreview(url: item.url))
         NSApp.activate(ignoringOtherApps: true); previewWindow?.makeKeyAndOrderFront(nil)
     }
-    func shutdown() {
+    func shutdown() async {
         shortcut.unregister(); store.stop()
         for entry in workspaces.values { entry.model.closeWorkspace() }
+        await cloudModel.shutdown()
     }
 }
 

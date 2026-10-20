@@ -60,7 +60,11 @@ final class CloudBrowserModel: ObservableObject {
     var canDisconnect: Bool { client != nil || error != nil }
     var currentFolderName: String { folders.last?.name ?? provider.displayName }
 
+    private var activeBrowsers = 0
+
     func activate() {
+        activeBrowsers += 1
+        guard activeBrowsers == 1, !transferBusy, !connectionBusy else { return }
         loadSyncPair()
         if connected { refresh() }
         else if client == nil { loadConfiguration() }
@@ -267,8 +271,18 @@ final class CloudBrowserModel: ObservableObject {
     }
 
     func deactivate() {
+        activeBrowsers = max(0, activeBrowsers - 1)
+        guard activeBrowsers == 0 else { return }
         // A requested disconnect must finish even if the user leaves this section.
         if !disconnecting && !automaticSync { cancelActiveWork() }
+    }
+
+    /// Let cancelled transfers finish their cleanup/checkpoints before the process exits.
+    func shutdown() async {
+        let pending = [uploadTask, syncTask, downloadTask, configurationTask, authenticationTask, listingTask]
+        cancelActiveWork()
+        for task in pending { await task?.value }
+        await authenticationCleanupTask?.value
     }
 
     private func handleExpiredConnection(_ error: Error) {

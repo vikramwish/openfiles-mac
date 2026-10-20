@@ -51,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if smokeRoot != nil { return .terminateNow }
         Task {
-            do { await model.finishIndexingBeforeQuit(); _ = try await model.vault.lock(); self.searchPanel?.shutdown(); sender.reply(toApplicationShouldTerminate: true) }
+            do { await model.finishIndexingBeforeQuit(); _ = try await model.vault.lock(); await self.searchPanel?.shutdown(); sender.reply(toApplicationShouldTerminate: true) }
             catch {
                 let alert = NSAlert(); alert.messageText = "The vault is still in use"; alert.informativeText = "Close files open from the vault and try quitting again. \(error.localizedDescription)"; alert.runModal()
                 sender.reply(toApplicationShouldTerminate: false)
@@ -88,7 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         window.minSize = NSSize(width: 980, height: 680)
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
-        window.contentView = NSHostingView(rootView: ContentView().environmentObject(model))
+        window.contentView = NSHostingView(rootView: ContentView(cloudModel: CloudBrowserModel()).environmentObject(model))
         model.showWorkspace = { [weak window] in window?.makeKeyAndOrderFront(nil) }
         model.newWorkspace = model.showWorkspace
         smokeWindow = window
