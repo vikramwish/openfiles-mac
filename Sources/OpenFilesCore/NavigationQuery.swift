@@ -148,7 +148,7 @@ public final class SearchCatalog: @unchecked Sendable {
             if state.postings[term]?.isEmpty == true { state.postings.removeValue(forKey: term) }
         }
     }
-    public func matches(_ input: String, now: Date = Date(), vector: [Double]? = nil, engine: String? = nil, acceptsLegacyVectors: Bool = true, limit: Int = 100) -> [FileSearchMatch] {
+    public func matches(_ input: String, now: Date = Date(), vector: [Double]? = nil, engine: String? = nil, acceptsLegacyVectors: Bool = false, limit: Int = 100) -> [FileSearchMatch] {
         let plan = NavigationQuery(input, now: now)
         guard !plan.isEmpty, limit > 0 else { return [] }
         let phrase = plan.topic.text
@@ -194,8 +194,9 @@ public final class SearchCatalog: @unchecked Sendable {
             if let before = plan.before, file.modified >= before { return nil }
             if plan.topic.terms.isEmpty { return (path, FileSearchMatch(file: file, score: 1, reason: plan.photoLocation != nil ? "Photo location metadata" : "Metadata filter")) }
             let nameScore = plan.topic.coverage(words: snapshot.nameWords[path] ?? [])
+            let compatibleVector = file.indexMetadata.map { $0.engine == engine } ?? acceptsLegacyVectors
             let similarity = vector.flatMap { query in file.vector.map { document in
-                file.sensitive || (file.indexMetadata.map { $0.engine != engine } ?? !acceptsLegacyVectors) ? 0 : VectorMath.cosine(query, document)
+                file.sensitive || !compatibleVector ? 0 : VectorMath.cosine(query, document)
             } } ?? 0
             let coverage = plan.topic.coverage(words: snapshot.documentWords[path] ?? [])
             let score: Double
