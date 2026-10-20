@@ -52,7 +52,7 @@ struct RenameChecks {
         checkNil(renamed.indexWarning)
         checkEqual(try String(contentsOf: renamed.destination, encoding: .utf8), fixture.contents)
         checkFalse(FileManager.default.fileExists(atPath: fixture.source.path))
-        let state = await library.current(); checkTrue(state.files.contains { $0.url == renamed.destination })
+        let state = await library.current(); checkTrue(state.files.contains { $0.url.resolvingSymlinksInPath().standardizedFileURL == renamed.destination.resolvingSymlinksInPath().standardizedFileURL })
         do { _ = try await library.applyRename(previewID: preview.id, name: "Another name.txt"); failCheck("Replayed a consumed rename") } catch { }
     }
     static func staleAndCollision() async throws {

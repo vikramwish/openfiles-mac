@@ -39,9 +39,17 @@ Download a compatible checkpoint first, then open **Indexing activity → Search
 
 See [docs/EMBEDDINGGEMMA.md](docs/EMBEDDINGGEMMA.md) for model download commands, how retrieval works, cache compatibility, and the optional real-model check. Filename/Spotlight search and the existing relevance rules continue to apply: similarity boosts matches with filename/document evidence.
 
-## Home and document packs
+## Search-first Home, collections, and document packs
 
-OpenFiles opens Home with three starting points: **Find something**, **Prepare documents**, and **Recover a version**. The menu bar and sidebar keep all three available.
+OpenFiles opens Home with a live search field and your recently updated collections. Search by filename, document contents, type, location, or modification date. Tools such as physical organization, cleanup, Photos, and version history remain available in the sidebar; opening Home does not analyze files for moves.
+
+**Collections** bring files and folders from different locations together without copying, moving, or renaming originals. Create a named collection on Home or in Collections. Select a search result or browser item and choose **Add to collection**, or use **Add files…** inside a collection. The same file can belong to multiple collections. Preview, open, reveal in Finder, rename a collection, and remove references independently of the originals.
+
+Collections persist local paths in private-permission JSON under application support and share updates across workspace windows. They do not contain document contents and are not encrypted storage or backups. References point to paths: external moves or renames are not followed automatically. Missing or inaccessible files stay listed; use **Refresh** after reconnecting a drive or **Locate…** to select a replacement path. Removing a reference or an entire collection leaves source files untouched. Collections do not grant filesystem permissions or automatically download cloud placeholders.
+
+## Document packs
+
+Choose **Prepare documents** on Home or in the sidebar for checklists and reviewed exports.
 
 **Prepare documents** creates a local checklist from Rental application, Expense claim, Travel documents, or a custom template. Edit the title, requirements, instructions, and search words; comma-separated search words act as alternatives. Suggestions show their matching evidence and never attach files automatically. Choose files manually for sensitive or unindexed documents.
 
@@ -88,7 +96,7 @@ Choose **Browse files** or a sidebar location to use the Finder-like browser. Th
 - Double-click a folder to browse it inside OpenFiles, or a file to open its default editor. Back/forward, parent-folder navigation, clickable breadcrumbs, and **Go to folder** (⌘⇧G) work without Finder.
 - **Search this Mac** searches Spotlight's indexed local volumes by filename and content. You can switch to the current folder. Results arrive while background semantic indexing is running. Search shows up to 1,000 Spotlight matches and the top 100 semantic matches; narrow your query to see other matches.
 - English semantic indexing starts automatically for your home folder, prioritizing Downloads, Documents, Desktop, Pictures, Music, and Movies. New indexes have no file-count cap; an optional limit is available in Indexing activity. **Index limits do not limit folder browsing or Spotlight search**. Apple’s model must be available for semantic results.
-- Select a file to see its preview, size, and location in the right panel. Switch that panel to **History** for saved versions and changes. Press Return to open it or Space for a larger Quick Look preview. Right-click for preview, enclosing-folder navigation, copy path, or commit. ⌘⇧N creates a folder; ⌘⇧. toggles hidden files.
+- Select a file to see its inline preview, size, and location. Use **Show or Hide Versions** in the window toolbar for saved versions and changes. Press Return to open it or Space for a larger Quick Look preview. Right-click for preview, enclosing-folder navigation, copy path, or commit. ⌘⇧N creates a folder; ⌘⇧. toggles hidden files.
 - macOS still enforces folder permissions. Protected folders may require approval in macOS or Full Disk Access. Spotlight excludes locations the OS or user has excluded from indexing. You can still browse accessible unindexed folders directly.
 
 Use **File → New Window** (⌘N) or **New Window** in the OpenFiles menu bar menu to open another workspace. Each window keeps its own folder, selection, search, navigation history, and commit message. Indexing, version history, and vault state are shared; menu commands follow the active window. Closing one window leaves the others open.
@@ -117,7 +125,7 @@ For a batch, use Command/Shift to select up to 50 files and choose **Suggest Fil
 
 **Organize → Analyze My Files** compares existing content embeddings across nested personal folders throughout your home and added locations. It suggests content topics (Work, Study, Travel, Home, Creative, Purchases, Events, Cooking) under `~/Organized`, with source/destination paths, similarity scores, and exclusion counts. Review up to 200 suggestions per pass, select individual files, then choose **Move Selected Files**. Analysis never moves files. Filename-only embeddings, uncertain matches, sensitive files, recognized projects, and system/app folders are excluded. Only indexed content can be analyzed; indexing activity shows remaining coverage. [Organization behavior and limits](docs/ORGANIZATION.md).
 
-Select a file in **Browse files** and switch the right panel from **Preview** to **History** to see changes and saved versions. Write a commit message, select the changes to include, and choose **Commit selected changes**. Commits use internal storage automatically: there is no destination picker or commit sheet. Unselected edits stay in the working file and remain available for a later commit.
+Select a file in **Browse files** and choose **Show or Hide Versions** in the window toolbar to see changes and saved versions. Write a commit message, select the changes to include, and choose **Commit selected changes**. Commits use internal storage automatically: there is no destination picker or commit sheet. Unselected edits stay in the working file and remain available for a later commit.
 
 Text files show selectable line changes. Folders and project packages show selectable files, including additions and deletions. PowerPoint and other binary formats use whole-document snapshots; individual slide or object changes are not yet supported. Text diffing is bounded to UTF-8 files up to 1 MB and 10,000 lines; larger files use whole-document snapshots.
 
@@ -191,9 +199,49 @@ One teammate can own SwiftUI and workflow design while the other extends the cor
 
 ## Safe UI smoke testing
 
-After `make build`, create a disposable directory under `/private/tmp` and run the executable with `OPENFILES_UI_SMOKE_ROOT` set to that directory. `OPENFILES_UI_SMOKE_SECTION` selects `home`, `packs`, `protection`, or `history`. This mode uses only `<fixture>/app-state`, bypasses default home discovery, search registration, background indexing, and automatic protection polling. Invalid fixture paths fail closed.
+After `make build`, create a disposable directory under `/private/tmp` and run the executable with `OPENFILES_UI_SMOKE_ROOT` set to that directory. `OPENFILES_UI_SMOKE_SECTION` selects `home`, `collections`, `packs`, `protection`, or `history`. This mode uses only `<fixture>/app-state`, bypasses default home discovery, search registration, background indexing, and automatic protection polling. Invalid fixture paths fail closed.
 
 ```sh
 mkdir -p /private/tmp/openfiles-ui-fixture
 OPENFILES_UI_SMOKE_ROOT=/private/tmp/openfiles-ui-fixture OPENFILES_UI_SMOKE_SECTION=home build/OpenFiles.app/Contents/MacOS/OpenFiles
 ```
+
+## Reviewed cleanup
+
+Open **Clean up**, choose a local folder, then **Analyze**. The review covers existing indexed files in that folder. Equal-size files are SHA-256 hashed in the background to find identical file contents. Every duplicate group must retain at least one copy. Names, metadata, file references and importance may differ even when content hashes match. Nothing is selected automatically.
+
+Suggestions flag installers/archives in Downloads modified over 90 days ago. When compatible local content embeddings are available, they can also flag older documents similar to newer ones (cosine similarity ≥ 0.94). Similarity does not establish duplication or that a document is superseded. Age is modification time, not last use. Suggestions never trigger automatic cleanup, and no cloud AI service receives file contents.
+
+Preview/reveal files and compare suggested related documents, select individual files, then review the complete path list before **Move to Trash**. The service revalidates hashes, file identity and retained duplicates before moving. It uses macOS Trash with no permanent-delete fallback. Successful moves produce local, private-permission receipts under `Cleanup/<review-id>.json`; restore using Finder’s Trash → Put Back. Trash may be emptied by macOS or the user and is not a backup. Cleanup cannot guarantee whether app references rely on a particular path.
+
+Cleanup excludes apps/project folders, source repositories, generated/system/hidden paths, links and hard links, sensitive-classified files, protected automatic-history locations, document-pack attachments, indexing exclusions, app storage and recognized iCloud items. Other cloud-sync providers are not reliably identifiable: choose a local folder, since deletion in a synced folder may propagate. Sensitivity checks are heuristic. Reviews are bounded to 5,000 eligible indexed files, 256 MB per file, 2 GB of hashing, 100,000 semantic comparisons, 500 comparison documents, and 100 suggestions. A partial review is marked in the interface. Unindexed, changed-since-index or excluded files may be absent. No scan or deletion runs automatically.
+
+### Photos libraries
+
+Use **Photos** in the workspace to browse, preview, search, and find exact duplicate photos without opening the Photos app. **Connect Photos** requests macOS read/write PhotoKit permission for the System Photo Library. From OpenFiles you can create albums, mark favorites, export original resources (including RAW/Live Photo/edited companions), and review removal of duplicate assets through PhotoKit. Changes can sync to iCloud and other devices. No photo is selected or removed automatically; **Select extra copies** is an explicit review shortcut that prefers retaining favorites and earlier capture dates.
+
+Duplicate detection streams SHA-256 hashes of every available resource per asset. Matching originals alone do not qualify when edited resources, resource types, or Live Photo videos differ. The app rechecks selected assets and retained copies before submitting deletion through PhotoKit, refuses unknown/stale selections, and retains at least one checked asset per group. Metadata such as albums and favorites can still differ, so review the displayed metadata. The default is local resources only; unavailable cloud resources are reported as skipped. Enable **Download cloud originals when needed** to permit network downloads. Duplicate totals describe fully read resources; they are not a promise of immediate disk-space recovery.
+
+**Understand contents** adds on-device Vision subjects and OCR terms to photo search. Search also uses filenames, capture dates, album names, favorite status, and the existing bounded offline GPS-to-city lookup. Analysis is held in memory for the session, refreshed after edits, and never uploaded. Video content is not analyzed. Export creates separate resource copies; it does not reconstruct a complete Photos library or its albums, and it is not an automatic photo-version backup.
+
+Opening a `.photoslibrary` file or choosing **Choose library…** inspects local `originals` or legacy `Masters` directories read-only, offers previews, original-file duplicate groups, content analysis, and export. These file groups are not confirmed duplicate Photos assets; no files or databases inside the bundle are moved, renamed, or deleted. Arbitrary secondary library mutation is not exposed by PhotoKit’s shared System Photo Library interface. Libraries with cloud-only originals, externally referenced originals, or other layouts may be incomplete or unavailable in this mode; connect the System Photo Library for library-aware albums and cleanup. General filesystem indexing still treats a Photos library as one package and excludes its contents from ordinary file cleanup and organization.
+
+## Developer space
+
+In **Clean up → Developer space**, choose a local project, cache directory or your home folder. This is a separate, explicit disk scan; it includes generated folders omitted from semantic search and needs no model or indexing pass. It measures allocated disk blocks and sorts largest first. APFS cloning, compression, hard links and Trash can make actual reclaimed space differ from the estimate.
+
+Recognized review candidates include project `node_modules` with a manifest and lockfile, Python virtual environments with adjacent dependency metadata, Swift `.build`, Rust `target`, framework output (`.next`, `.nuxt`, `.svelte-kit`, `.parcel-cache`), Python bytecode beside source, package download caches (pip, uv, Yarn, pnpm, Homebrew, npm, Gradle and Cargo registry), and individual Xcode DerivedData folders. Each item explains its evidence and how to rebuild it. Manifests do not guarantee every installed package or local edit can be recreated. No install, uninstall, shell, prune, or rebuild command is executed.
+
+VM bundles/disks, Docker/Colima/OrbStack storage, simulator device state, Xcode archives, Conda environments, shared Python/Node libraries, local Maven repositories, and environments lacking dependency metadata are **inspection-only**. They may contain unique data or shared runtime state. Use the owning tool to manage them; OpenFiles never selects or trashes them. Detection is based on recognized folder structures and filenames, not proof that a workload is unused. Unknown disk images and arbitrary directories are not assumed disposable.
+
+All selections begin empty. Stop affected servers, interpreters and builds and acknowledge this in the review, then inspect the full folder paths and rebuild guidance before moving anything to Trash. Cleanup captures every measured entry's identity, mode, size, nanosecond modification/change times and symlink destination into a tree fingerprint; manifests are included in review evidence. It verifies the complete tree again before moving each folder. Changed trees or manifests, incomplete scans, nested source repositories, newly protected items and redirected paths prevent removal. Internal dependency links are recorded without following their targets. Source files and lockfiles outside a selected artifact stay in place. This cannot prove that no running process will need a dependency later; stopping workloads is the user's responsibility.
+
+The scan respects automatic-history protection, document-pack attachments, app storage and exclusions. Known iCloud items, special files and symbolic-link discovery roots are skipped; system/shared installation directories are refused. Other sync providers cannot always be detected, so use local folders. Scans are capped at 50,000 discovery paths, 200 candidate artifacts, and 200,000 entries per measured artifact. Incomplete items are inspection-only and partial coverage is shown. Choose a narrower folder for further review. Metadata is read locally, not uploaded.
+
+Moving files to Trash **does not immediately free disk space**. Use Finder's Put Back to restore selected artifacts while they remain in Trash. Emptying Trash is permanent, and OpenFiles never empties it automatically. Receipts are saved locally with private permissions under `Cleanup/developer-<review-id>.json`.
+
+#### Similar-looking photos
+
+**Find similar** compares image appearance on device using Apple Vision revision-2 feature prints from thumbnails up to 1,024 pixels. This finds variations such as small crops or changed encodings independently of original-byte duplicate checks. **Very close** is the default; **Broader matches** relaxes the visual-distance range. Results are heuristic suggestions, not a percentage confidence or proof of duplication. Videos and unavailable images are counted as skipped; cloud downloads follow the same opt-in setting as other photo tools.
+
+Each disjoint group compares its members with one reference image. Similarity does not chain through intermediate matches to label distant images as similar; some relationships may fall into different groups. Radius search uses a vantage-point tree rather than comparing every possible image pair. Visual descriptions are cached in memory for the current source and invalidated when the source revision changes. Similar review has no automatic selection or deletion action; exporting, favorites, and albums remain available. Exact-resource duplicate cleanup remains a separate review with retained-copy and stale-source checks.

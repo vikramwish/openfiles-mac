@@ -39,7 +39,7 @@ struct NativeWindowChrome: NSViewRepresentable {
             self.window = window
             // SwiftUI tables hosted outside a Window scene do not reliably forward onKeyPress.
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self, event.window === self.window, self.parent.model.section == .files,
+                guard let self, event.window === self.window, (self.parent.model.section == .files || !self.parent.model.query.isEmpty),
                       self.parent.model.selectedItem != nil,
                       event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
                       !(self.window?.firstResponder is NSTextView),
@@ -65,13 +65,13 @@ struct NativeWindowChrome: NSViewRepresentable {
             if let keyMonitor { NSEvent.removeMonitor(keyMonitor); self.keyMonitor = nil }
         }
         func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-            ["sidebar", "back", "forward", NSToolbarItem.Identifier.flexibleSpace.rawValue, "newFolder", "preview", "more", "inspector", NSToolbarItem.Identifier.flexibleSpace.rawValue, "search"].map { NSToolbarItem.Identifier($0) }
+            ["sidebar", "back", "forward", NSToolbarItem.Identifier.flexibleSpace.rawValue, "more", NSToolbarItem.Identifier.flexibleSpace.rawValue, "search"].map { NSToolbarItem.Identifier($0) }
         }
         func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
         func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
             if identifier.rawValue == "search" {
                 let item = NSSearchToolbarItem(itemIdentifier: identifier)
-                item.searchField.placeholderString = "Search This Mac"
+                item.searchField.placeholderString = "Find anything on this Mac"
                 item.searchField.delegate = self
                 item.searchField.sendsSearchStringImmediately = true
                 item.searchField.sendsWholeSearchString = false
@@ -103,7 +103,7 @@ struct NativeWindowChrome: NSViewRepresentable {
             if let toolbar, window?.toolbar !== toolbar { window?.toolbar = toolbar }
             toolbar?.isVisible = true
             let model = parent.model
-            window?.title = model.section == .files ? (model.query.isEmpty ? (model.currentFolder.path == "/" ? "This Mac" : model.currentFolder.lastPathComponent) : "Search") : model.section.rawValue
+            window?.title = model.section == .files ? (model.query.isEmpty ? (model.currentFolder.path == "/" ? "This Mac" : model.currentFolder.lastPathComponent) : "Search") : model.section == .cloud ? model.section.rawValue : "Workspace"
             window?.representedURL = model.section == .files && model.query.isEmpty ? model.currentFolder : nil
             items["back"]?.isEnabled = model.section == .files && model.canGoBack
             items["forward"]?.isEnabled = model.section == .files && model.canGoForward
@@ -128,7 +128,8 @@ struct NativeWindowChrome: NSViewRepresentable {
         }
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSSearchField else { return }
-            parent.model.section = .files; parent.model.query = field.stringValue
+            if parent.model.section != .files && parent.model.section != .photos { parent.model.section = .home }
+            parent.model.query = field.stringValue
         }
         @objc private func sidebar() { parent.toggleSidebar() }
         @objc private func back() { parent.model.back() }
@@ -138,9 +139,13 @@ struct NativeWindowChrome: NSViewRepresentable {
         @objc private func inspector() { parent.showsInspector.toggle() }
         @objc private func more() {
             let menu = NSMenu()
-            for (title, action) in [("Go to Folder…", #selector(go)), ("Open Location…", #selector(location)), ("Show Hidden Files", #selector(hidden)), ("Refresh", #selector(reload)), ("Indexing Activity…", #selector(indexing))] {
+            menu.autoenablesItems = false
+            for (title, action) in [("New Folder", #selector(newFolder)), ("Quick Look", #selector(preview)), ("Show or Hide Versions", #selector(inspector)), ("Go to Folder…", #selector(go)), ("Open Location…", #selector(location)), ("Show Hidden Files", #selector(hidden)), ("Refresh", #selector(reload)), ("File Activity…", #selector(indexing))] {
                 let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
                 item.target = self
+                if action == #selector(newFolder) { item.isEnabled = parent.model.section == .files && parent.model.query.isEmpty }
+                if action == #selector(preview) { item.isEnabled = parent.model.section == .files && parent.model.selectedItem != nil }
+                if action == #selector(inspector) { item.isEnabled = parent.model.section == .files }
                 if action == #selector(hidden) { item.state = parent.model.showHidden ? .on : .off }
                 menu.addItem(item)
             }

@@ -105,7 +105,7 @@ final class SearchStore: ObservableObject {
         if let mode = plan.grouping { grouping = mode }
         // This is the primary path: cached postings + metadata, with no debounce or file I/O.
         local = cachedResults(text); merge()
-        let token = generation, input = text, revision = model.library.searchCatalog.revision
+        let token = generation, input = text
         task = Task {
             do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
             guard !Task.isCancelled else { return }
@@ -113,7 +113,7 @@ final class SearchStore: ObservableObject {
             if !plan.hasFilters { systemWorking = true; spotlight.search(input) }
             let matches = await model.library.searchMatches(input)
             guard generation == token, !Task.isCancelled else { return }
-            if model.library.searchCatalog.revision == revision {
+            if generation == token {
                 let refined = matches.map { match in
                     let file = match.file
                     return SearchResult(item: BrowserItem(url: file.url, isFolder: false, isPackage: file.isProject, size: file.size, modified: file.modified), score: match.score, reason: match.reason)

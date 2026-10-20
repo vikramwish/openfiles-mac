@@ -31,6 +31,66 @@ func checkEqual(_ lhs: Double, _ rhs: Double, accuracy: Double, file: StaticStri
 @main
 struct Runner {
     static func main() async {
+        if CommandLine.arguments.contains("--collections") {
+            for (name, scenario) in CollectionChecks.scenarios {
+                let previous = log.failures
+                do { try await scenario() } catch { failCheck(error.localizedDescription) }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(CollectionChecks.scenarios.count) collection scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--photo-similarity") {
+            for (name, scenario) in PhotoSimilarityChecks.scenarios {
+                let previous = log.failures
+                do { try await scenario() } catch { failCheck(error.localizedDescription) }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(PhotoSimilarityChecks.scenarios.count) photo similarity scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--organization") {
+            for (name, check) in OrganizationChecks.scenarios {
+                let previous = log.failures
+                do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(OrganizationChecks.scenarios.count) organization scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--photo-tools") {
+            for (name, scenario) in PhotoToolChecks.scenarios {
+                let previous = log.failures
+                do { try await scenario() } catch { failCheck(error.localizedDescription) }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(PhotoToolChecks.scenarios.count) photo tool scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--index") {
+            let scenarios = IndexChecks.scenarios + PipelineOptimizationChecks.scenarios
+            for (name, check) in scenarios {
+                let previous = log.failures
+                do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(scenarios.count) indexing scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--photoslibrary") {
+            do { try await NavigationChecks.photosLibraries() } catch { failCheck(error.localizedDescription) }
+            print("Photos library checks; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--cleanup") {
+            for (name, check) in CleanupChecks.scenarios + DeveloperCleanupChecks.scenarios {
+                let previous = log.failures
+                do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(CleanupChecks.scenarios.count + DeveloperCleanupChecks.scenarios.count) cleanup scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
         if CommandLine.arguments.contains("--versions") {
             for (name, check) in VersionChecks.scenarios {
                 let previous = log.failures
@@ -62,7 +122,7 @@ struct Runner {
             catch { failCheck("\(name): \(error.localizedDescription)"); try? suite.tearDownWithError() }
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
         }
-        let scenarioGroups = [IndexChecks.scenarios, NavigationChecks.scenarios, ImageContentChecks.scenarios, OrganizationChecks.scenarios, EmbeddingGemmaChecks.scenarios, DocumentPackChecks.scenarios, AutomaticHistoryChecks.scenarios, CleanupChecks.scenarios, RenameChecks.scenarios, CloudPlacementChecks.scenarios]
+        let scenarioGroups = [IndexChecks.scenarios, PipelineOptimizationChecks.scenarios, NavigationChecks.scenarios, PhotoToolChecks.scenarios, PhotoSimilarityChecks.scenarios, ImageContentChecks.scenarios, OrganizationChecks.scenarios, EmbeddingGemmaChecks.scenarios, DocumentPackChecks.scenarios, CollectionChecks.scenarios, AutomaticHistoryChecks.scenarios, CleanupChecks.scenarios, RenameChecks.scenarios, DeveloperCleanupChecks.scenarios, CloudPlacementChecks.scenarios]
         for (name, check) in scenarioGroups.flatMap({ $0 }) {
             let previous = log.failures
             do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
@@ -74,19 +134,10 @@ struct Runner {
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
         }
         do { try await VaultChecks().testEncryptedVaultRoundTrip() } catch { failCheck("Encrypted vault: \(error.localizedDescription)") }
-        do { try await EmbeddingGemmaChecks.realModelIfRequested() } catch { failCheck("EmbeddingGemma 2: \(error.localizedDescription)") }
+do { try await EmbeddingGemmaChecks.realModelIfRequested() } catch { failCheck("EmbeddingGemma 2: \(error.localizedDescription)") }
         var scenarioCount = checks.count
-        scenarioCount += IndexChecks.scenarios.count
-        scenarioCount += NavigationChecks.scenarios.count
-        scenarioCount += ImageContentChecks.scenarios.count
-        scenarioCount += OrganizationChecks.scenarios.count
-        scenarioCount += EmbeddingGemmaChecks.scenarios.count
-        scenarioCount += RenameChecks.scenarios.count
-        scenarioCount += CloudPlacementChecks.scenarios.count
+        scenarioCount += scenarioGroups.reduce(0) { $0 + $1.count }
         scenarioCount += VersionChecks.scenarios.count
-        scenarioCount += DocumentPackChecks.scenarios.count
-        scenarioCount += AutomaticHistoryChecks.scenarios.count
-        scenarioCount += CleanupChecks.scenarios.count
         print("\(scenarioCount) core scenarios; \(log.failures) failures")
         exit(log.failures == 0 ? 0 : 1)
     }

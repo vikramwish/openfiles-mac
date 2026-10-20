@@ -65,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         do {
             model.state = try await model.library.load()
             await model.packs.load()
+            await model.collections.load()
             await model.protection.load()
             model.packs.selectedID = model.packs.packs.first?.id
             model.indexSettings = model.state.indexSettings ?? model.indexSettings
@@ -75,7 +76,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         } catch {
             model.error = "Could not load UI smoke fixture: \(error.localizedDescription)"
         }
-        switch ProcessInfo.processInfo.environment["OPENFILES_UI_SMOKE_SECTION"] ?? "home" {
+        switch ProcessInfo.processInfo.environment["OPENFILES_UI_SMOKE_SECTION"] ?? Bundle.main.object(forInfoDictionaryKey: "OpenFilesUISmokeSection") as? String ?? "home" {
+        case "photos":
+            model.section = .photos
+            if let fixture = smokeRoot?.appendingPathComponent("Demo.photoslibrary"), FileManager.default.fileExists(atPath: fixture.path) {
+                model.photoLibrary.inspect(fixture)
+            }
+case "collections": model.section = .collections; model.selectedCollectionID = model.collections.collections.first?.id
         case "packs": model.section = .packs
         case "protection": model.section = .protection
         case "history": model.section = .history
@@ -137,6 +144,7 @@ struct WorkspaceCommands: Commands {
             Button("Prepare documents…") { model.section = .packs; model.showWorkspace?() }
             Button("Search files…") { model.showSearch?() }.keyboardShortcut(.space, modifiers: [.command, .shift])
             Button("Browse files…") { model.section = .files; model.showWorkspace?() }
+            Button("Clean up files…") { model.section = .cleanup; model.showWorkspace?() }
 
             Button("Open location…") { model.chooseFolder() }.keyboardShortcut("o", modifiers: [.command, .shift])
             Button("Go to folder…") { model.requestGo() }.keyboardShortcut("g", modifiers: [.command, .shift])
@@ -159,6 +167,7 @@ struct MenuContents: View {
         Button("Prepare documents…") { model.section = .packs; show() }
         Button("Search files…   ⌘⇧Space") { model.showSearch?() }
         Button("Browse files…") { model.section = .files; show() }
+        Button("Clean up files…") { model.section = .cleanup; show() }
         Button("New Window") { model.newWorkspace?() }.keyboardShortcut("n", modifiers: .command)
         Divider()
         if let url = model.editingURL {

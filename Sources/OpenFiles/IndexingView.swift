@@ -4,12 +4,23 @@ import OpenFilesCore
 struct IndexingView: View {
     @EnvironmentObject private var model: AppModel
     private var progress: IndexProgress { model.indexProgress }
+    private var activityTitle: String {
+        if model.indexSettings.paused || progress.phase == .paused { return "Paused" }
+        switch progress.phase {
+        case .paused: return "Paused"
+        case .failed: return "Needs attention"
+        case .cancelled: return "Stopped"
+        case .discovering: return "Finding files…"
+        case .indexing: return "Reading file contents…"
+        case .idle, .completed: return model.indexing ? "Starting…" : "Ready"
+        }
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("Indexing activity").font(.title2.weight(.semibold))
-                    Text("See what’s processed, reused, and left out. Your files stay on this Mac.").font(.body).foregroundStyle(.secondary)
+                    Text("Your folders").font(.title2.weight(.semibold))
+                    Text("OpenFiles keeps search up to date in the background. Choose what it can work with.").font(.body).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Done") { model.showingIndexing = false }.keyboardShortcut(.cancelAction)
@@ -18,6 +29,10 @@ struct IndexingView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     activity
+                    scopes
+                    exclusions
+                    DisclosureGroup("Technical details") {
+                        VStack(alignment: .leading, spacing: 22) {
                     HStack(spacing: 12) {
                         metric("New embeddings", value: "\(progress.embedded)", detail: "\(progress.tokenized) new tokenization passes")
                         metric("Reused", value: "\(progress.reused)", detail: "\(progress.statHits) unchanged · \(progress.objectHits) by content")
@@ -29,30 +44,41 @@ struct IndexingView: View {
                     exclusions
                     HStack(alignment: .top, spacing: 20) { scopes; skips }
                     events
+                        }.padding(.top, 16)
+                    }
+
                 }.padding(24)
             }
-        }.frame(width: 900, height: 730)
+        }.frame(minWidth: 680, idealWidth: 760, minHeight: 560, idealHeight: 680)
     }
     private var activity: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label(model.indexSettings.paused ? "Paused" : progress.phase.rawValue.capitalized, systemImage: model.indexSettings.paused ? "pause.circle" : "waveform.path").font(.headline)
+                Label(activityTitle, systemImage: model.indexSettings.paused ? "pause.circle" : "waveform.path").font(.headline)
                 Spacer()
                 if model.indexing { Button("Stop after current files") { model.stopIndexing() } }
-                Button(model.indexSettings.paused ? "Resume indexing" : "Pause indexing") { model.setIndexPaused(!model.indexSettings.paused) }
+                Button(model.indexSettings.paused ? "Resume updates" : "Pause updates") { model.setIndexPaused(!model.indexSettings.paused) }
                 if !model.indexing { Button("Check for changes") { model.startIndexing() }.disabled(model.indexSettings.paused) }
             }.buttonStyle(.bordered).controlSize(.small)
-            if progress.phase == .discovering { ProgressView().progressViewStyle(.linear) }
+            if progress.fraction == nil && model.indexing { ProgressView().progressViewStyle(.linear) }
             else if let fraction = progress.fraction { ProgressView(value: fraction) }
             HStack {
-                Text("\(progress.processed) processed / \(progress.discovered) discovered").font(.body.weight(.medium))
+                Text("\(progress.processed) of \(progress.discovered) files checked").font(.body.weight(.medium))
                 Spacer()
-                Text("\(progress.checkpointed) checkpointed").font(.callout).foregroundStyle(.secondary)
+                Text("Progress saved automatically").font(.callout).foregroundStyle(.secondary)
             }
-            Text(progress.message).font(.callout).foregroundStyle(.secondary)
-            if progress.limitReached { Label("This pass reached the semantic file limit. More files may remain; raise the limit below. Browsing and Spotlight still cover accessible locations.", systemImage: "info.circle").font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
-            ForEach(progress.activePaths ?? [], id: \.self) { path in Text("Assigned: " + path).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(path) }
-            if !progress.currentPath.isEmpty { Text("Latest decision: " + progress.currentPath).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(progress.currentPath) }
+            Text("\(model.library.searchCatalog.count) files available in search now").font(.callout).foregroundStyle(.secondary)
+            if let path = progress.activePaths?.first, model.indexing {
+                Label(path.replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~"), systemImage: "doc.text.magnifyingglass")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(path)
+            }
+            if progress.phase == .failed || progress.phase == .cancelled || progress.phase == .paused {
+                Text(progress.message).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+            } else {
+                Text(model.indexing ? "Completed batches are searchable immediately. Each batch prioritizes personal documents; the first scan can take several minutes." : "OpenFiles checks for changes while it’s running.").font(.callout).foregroundStyle(.secondary)
+            }
+            if progress.limitReached { Label("More files may be available. Adjust the file limit in Technical details to include them.", systemImage: "info.circle").font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
+
         }.padding(16).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9))
     }
     private func metric(_ label: String, value: String, detail: String) -> some View {
@@ -100,8 +126,8 @@ struct IndexingView: View {
     }
     private var exclusions: some View {
         VStack(alignment: .leading, spacing: 9) {
-            HStack { Text("Your exclusions").font(.headline); Spacer(); Button("Exclude folder…") { model.addIndexExclusion() }.disabled(model.indexing) }
-            Text("Exclusions affect semantic indexing only. Browsing and macOS Spotlight remain available. Defaults also exclude hidden items, symbolic links, generated/system directories, app data, and vault contents.").font(.caption).foregroundStyle(.secondary)
+            HStack { Text("Folders to leave out").font(.headline); Spacer(); Button("Exclude folder…") { model.addIndexExclusion() }.disabled(model.indexing) }
+            Text("OpenFiles won’t analyze the contents of these folders. You can still browse them and find them through macOS search. System files, app data, and vault contents are left out automatically.").font(.caption).foregroundStyle(.secondary)
             if model.indexSettings.excludedFolders.isEmpty { Text("No additional exclusions").font(.callout).foregroundStyle(.secondary) }
             ForEach(model.indexSettings.excludedFolders, id: \.self) { folder in
                 HStack { Text(folder.path).font(.caption).lineLimit(1).truncationMode(.middle); Spacer(); Button("Remove") { var settings = model.indexSettings; settings.excludedFolders.removeAll { $0 == folder }; model.updateIndexSettings(settings) }.disabled(model.indexing) }
@@ -110,9 +136,10 @@ struct IndexingView: View {
     }
     private var scopes: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("Discovery scope").font(.headline)
+            Text("Folders OpenFiles can see").font(.headline)
             ForEach(Array(Set(model.indexScopes)).sorted { $0.path < $1.path }, id: \.self) { url in Text(url.path).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
-            Text("Content bounds: 5 MB files; 64 KiB text reads; up to 20 PDF pages; 4,000 input characters per embedding. Unsupported formats use their filename.").font(.caption).foregroundStyle(.secondary).lineSpacing(3)
+            Button("Add a folder…") { model.chooseOrganizationFolder() }
+            Text("Some protected folders need permission from macOS. Large files and unsupported formats may only be searchable by name.").font(.caption).foregroundStyle(.secondary).lineSpacing(3)
         }.frame(maxWidth: .infinity, alignment: .topLeading)
     }
     private var skips: some View {

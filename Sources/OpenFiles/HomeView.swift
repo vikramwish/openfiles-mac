@@ -1,85 +1,98 @@
 import SwiftUI
 import OpenFilesCore
 
+private typealias HomeState<Value> = SwiftUI.State<Value>
+
+/// Search is always available; collections provide a place to continue a task.
 struct HomeView: View {
     @EnvironmentObject private var model: AppModel
-    @ObservedObject var packs: DocumentPacksModel
+    @ObservedObject var collections: CollectionsModel
     @ObservedObject var cloud: CloudBrowserModel
+    @HomeState private var creating = false
+    @FocusState private var searchFocused: Bool
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Your files, ready for what’s next.").font(.largeTitle.weight(.semibold))
-                    Text("Find what you need, get your paperwork ready, and keep the versions that matter.")
-                        .font(.title3).foregroundStyle(.secondary)
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Find what you need.").font(.largeTitle.weight(.semibold))
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search by name, contents, or date…", text: Binding(
+                        get: { model.query },
+                        set: { model.searchThisFolder = false; model.query = $0 }
+                    ))
+                    .textFieldStyle(.plain).font(.title3).focused($searchFocused)
+                    .accessibilityLabel("Search your files")
+                    if !model.query.isEmpty {
+                        Button { model.query = ""; searchFocused = true } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("Clear search")
+                    } else { Text("⌘F").font(.caption).foregroundStyle(.secondary) }
+                }.padding(14).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                if model.query.isEmpty {
+                    Text("Try “PDFs in Downloads this month” or words from a document.")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 14)], spacing: 14) {
-                    action("Find something", detail: "A few words are enough. Search by name, topic, or date.", symbol: "magnifyingglass") { model.showSearch?() }
-                    action("Make room", detail: "Review exact duplicates and possible cleanup candidates.", symbol: "sparkles.rectangle.stack") { model.section = .cleanup }
-                    action("Prepare documents", detail: "Gather a checklist of files, review them, and export copies.", symbol: "checklist") { model.section = .packs }
-                    action("Recover a version", detail: "Browse saved versions and restore earlier work.", symbol: "clock.arrow.circlepath") { model.section = .history }
-                }
-                HomeCloudView(cloud: cloud)
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("What are you getting ready for?").font(.title2.weight(.semibold))
-                    Text("Start with an editable checklist. Templates are suggestions; check the recipient’s requirements.")
-                        .foregroundStyle(.secondary)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
-                        ForEach(DocumentPackTemplate.examples) { template in
-                            Button { packs.create(template); model.section = .packs } label: {
-                                HStack { Image(systemName: "folder.badge.plus").foregroundStyle(.tint); Text(template.title).lineLimit(2).fixedSize(horizontal: false, vertical: true); Spacer(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary) }
-                                    .padding(14).frame(maxWidth: .infinity, alignment: .leading)
-                            }.buttonStyle(.bordered).disabled(packs.busy)
+            }.padding(24)
+            if !model.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Divider()
+                BrowserView()
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        HomeCloudView(cloud: cloud)
+                        HStack {
+                            Text("Your collections").font(.title2.weight(.semibold))
+                            Spacer()
+                            Button("New collection", systemImage: "plus") { creating = true }.disabled(collections.busy)
                         }
-                    }
-                }
-                if !packs.packs.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Continue preparing").font(.title2.weight(.semibold))
-                        ForEach(packs.packs.prefix(3)) { pack in
-                            Button { packs.selectedID = pack.id; model.section = .packs } label: {
-                                HStack {
-                                    Image(systemName: "folder").foregroundStyle(.tint)
-                                    Text(pack.title).fontWeight(.medium)
-                                    Spacer()
-                                    Text("\(pack.items.filter { !$0.attachments.isEmpty }.count) of \(pack.items.count) items gathered").foregroundStyle(.secondary)
-                                    Image(systemName: "chevron.right").foregroundStyle(.secondary)
-                                }.padding(12).contentShape(Rectangle())
-                            }.buttonStyle(.plain)
+                        Text("Keep files for a trip, course, or project together. Originals stay where they are.")
+                            .font(.callout).foregroundStyle(.secondary)
+                        if collections.collections.isEmpty {
+                            ContentUnavailableView {
+                                Label("A place for your next task", systemImage: "rectangle.stack")
+                            } description: {
+                                Text("Create a collection, then add files from search or choose them from any folder.")
+                            } actions: {
+                                Button("Create collection") { creating = true }.disabled(collections.busy)
+                            }.frame(maxWidth: .infinity).padding(.vertical, 20)
+                        } else {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
+                                ForEach(collections.collections.prefix(6)) { collection in
+                                    Button {
+                                        model.selectedCollectionID = collection.id; model.section = .collections
+                                    } label: {
+                                        VStack(alignment: .leading, spacing: 12) {
+                                            Image(systemName: "rectangle.stack").font(.title2).foregroundStyle(.tint)
+                                            Text(collection.title).font(.headline).lineLimit(2)
+                                            Text("\(collection.files.count) references").font(.callout).foregroundStyle(.secondary)
+                                        }.frame(maxWidth: .infinity, minHeight: 100, alignment: .leading).padding(16)
+                                            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                                            .contentShape(RoundedRectangle(cornerRadius: 10))
+                                    }.buttonStyle(.plain)
+                                }
+                            }
+                            Button("View all collections") { model.selectedCollectionID = nil; model.section = .collections }
                         }
-                    }
-                }
-                GroupBox {
-                    HStack(alignment: .top, spacing: 16) {
-                        Image(systemName: "shield.lefthalf.filled").font(.title2).foregroundStyle(.tint)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Keep saved changes automatically").font(.headline)
-                            Text("Choose important files or a small project folder. OpenFiles saves local versions while it’s running.")
-                                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        Divider().padding(.vertical, 4)
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: "checklist").font(.title2).foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Preparing paperwork?").font(.headline)
+                                Text("Use a checklist to review documents and export copies for a rental, trip, or expense claim.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                                Button("Prepare documents") { model.section = .packs }
+                            }
                         }
-                        Spacer()
-                        Button("Set up…") { model.section = .protection }
-                    }.padding(10)
+                    }.padding(.horizontal, 24).padding(.bottom, 24)
                 }
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "internaldrive")
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("On this Mac · \(model.library.searchCatalog.count) files indexed")
-                        Text("Search coverage depends on folder access and supported formats. You can always choose documents yourself.")
-                    }
-                    Spacer()
-                    Button("View coverage") { model.showingIndexing = true }
-                }.font(.callout).foregroundStyle(.secondary)
-            }.padding(32).frame(maxWidth: 1080, alignment: .leading).frame(maxWidth: .infinity)
+            }
         }
-    }
-    private func action(_ title: String, detail: String, symbol: String, perform: @escaping () -> Void) -> some View {
-        Button(action: perform) {
-            VStack(alignment: .leading, spacing: 14) {
-                Image(systemName: symbol).font(.title).foregroundStyle(.tint)
-                Text(title).font(.title3.weight(.semibold)).lineLimit(nil)
-                Text(detail).font(.callout).foregroundStyle(.secondary).lineLimit(nil).fixedSize(horizontal: false, vertical: true)
-            }.frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading).padding(18).contentShape(Rectangle())
-        }.buttonStyle(.bordered).multilineTextAlignment(.leading)
+        .onAppear { searchFocused = true }
+        .sheet(isPresented: $creating) {
+            CollectionNameSheet(heading: "New collection") { title in
+                guard let id = await collections.create(title) else { return false }
+                model.selectedCollectionID = id; model.section = .collections
+                return true
+            }
+        }
     }
 }

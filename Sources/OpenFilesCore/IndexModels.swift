@@ -58,6 +58,7 @@ public struct IndexProgress: Codable, Sendable {
     public var started: Date?
     public var finished: Date?
     public var discovered = 0
+    public var discoveryComplete: Bool? = nil
     public var processed = 0
     public var statHits = 0
     public var objectHits = 0
@@ -84,7 +85,7 @@ public struct IndexProgress: Codable, Sendable {
     public var checkpointed = 0
     public var message = "Ready to index"
     public init() {}
-    public var fraction: Double? { discovered > 0 && phase != .discovering ? Double(processed) / Double(discovered) : nil }
+    public var fraction: Double? { discovered > 0 && phase != .discovering && discoveryComplete != false ? Double(processed) / Double(discovered) : nil }
     public var reused: Int { statHits + objectHits }
     public var filesPerSecond: Double { activeSeconds > 0 ? Double(processed) / activeSeconds : 0 }
     public var skipped: Int { skipReasons.values.reduce(0, +) }
