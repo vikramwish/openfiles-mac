@@ -198,7 +198,7 @@ final class AppModel: ObservableObject {
         }
     }
     func stopIndexing() { Task { await library.cancelIndexing() } }
-    func finishIndexingBeforeQuit() async { await library.cancelIndexing(); await indexTask?.value }
+    func finishIndexingBeforeQuit() async { await library.cancelIndexing(); await indexTask?.value; await library.waitForIndexingToStop() }
     func updateIndexSettings(_ settings: IndexSettings) {
         Task {
             do { try await library.configureIndexing(settings); indexSettings = settings; state = await library.current(); search() }

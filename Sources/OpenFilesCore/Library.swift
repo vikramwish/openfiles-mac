@@ -87,6 +87,9 @@ public actor FileLibrary {
         indexMonitor.publish(progress); try save()
     }
     public func cancelIndexing() { control?.cancel() }
+    public func waitForIndexingToStop() async {
+        while scanRunning { try? await Task.sleep(for: .milliseconds(50)) }
+    }
     public func indexingIsRunning() -> Bool { scanRunning }
     public func indexScopes() -> [URL] { state.roots + discoveryRoots }
     public func scan() async throws -> ScanReport {

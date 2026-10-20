@@ -39,14 +39,14 @@ Run the disposable benchmark in release mode:
 swift run --build-system native -c release OpenFilesBenchmark --count 48
 ```
 
-A single comparison on the initial developer's **Apple M3 Max (arm64, 16 active CPUs)** used 48 bounded text documents containing 24 unique contents, with no user files. Both versions used the same Apple native sentence-embedding backend and the same corpus generator. The baseline was repository commit `144b5d8`, built separately; build time is excluded.
+Three alternating baseline/optimized runs on the initial developer's **Apple M3 Max (arm64, 16 active CPUs)** used 48 bounded text documents containing 24 unique contents, with no user files. The table reports medians. Both versions used the same Apple native sentence-embedding backend and the same corpus generator. The baseline was repository commit `144b5d8`, built separately; build time is excluded.
 
 | Pass | Baseline | Incremental implementation | Observed ratio |
 | --- | ---: | ---: | ---: |
-| Cold corpus | 2.034 s | 0.975 s | 2.1× faster |
-| Warm refresh, same process | 0.062 s | 0.007 s | 8.9× faster |
+| Cold corpus | 2.128 s | 1.069 s | 2.0× faster |
+| Warm refresh, same process | 0.064 s | 0.008 s | 8.0× faster |
 
-This is one small synthetic run, not a universal speed claim. Duplicate content favors object reuse. Whole-home performance depends on file formats, storage, model initialization, cache state, temperature, and permissions. The benchmark also reports inference/read/tokenization counters and a restart-inclusive warm scan. Tests use an injectable backend to verify that warm scans perform zero content reads and zero inference, and that restart, cancellation, replacement, model-version changes, and missing objects behave correctly.
+This is a small synthetic comparison, not a universal speed claim. The optimized cold range was 1.064–1.083 s; warm range 0.008–0.010 s. All three warm passes reported zero content reads, zero new word-count/tokenization passes, zero inference calls, and 48 stat-cache hits. Duplicate content favors object reuse. Whole-home performance depends on file formats, storage, model initialization, cache state, temperature, and permissions. The benchmark also reports inference/read/tokenization counters and a restart-inclusive warm scan. Tests use an injectable backend to verify that warm scans perform zero content reads and zero inference, and that restart, cancellation, replacement, model-version changes, and missing objects behave correctly.
 
 ## References and extension boundary
 

@@ -99,7 +99,7 @@ struct IndexChecks {
         try await library.pauseIndexing(true)
         try await Task.sleep(for: .milliseconds(80)); let settled = library.indexMonitor.snapshot().processed
         try await Task.sleep(for: .milliseconds(80)); checkEqual(library.indexMonitor.snapshot().processed, settled)
-        await library.cancelIndexing(); let stopped = try await task.value
+        await library.cancelIndexing(); await library.waitForIndexingToStop(); let stopped = try await task.value
         checkEqual(stopped.progress.phase, .cancelled); checkTrue(stopped.state.files.count >= 3)
         let restart = FileLibrary(directory: f.data, embeddingFactory: { TestEmbeddingBackend(counter) })
         let saved = try await restart.load(); checkEqual(saved.files.count, stopped.state.files.count)
