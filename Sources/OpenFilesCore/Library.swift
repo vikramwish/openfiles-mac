@@ -183,7 +183,7 @@ public actor FileLibrary {
         let scopes = (state.roots + discoveryRoots).map(stableChangeURL), appData = stableChangeURL(directory)
         let prior = Dictionary(state.files.map { (stableChangeURL($0.url).path, $0) }, uniquingKeysWith: { first, _ in first })
         let worker = IndexWorker(backend: embeddingFactory(), objects: objects)
-        let job = Task.detached(priority: .utility) {
+        let job: Task<([FileRecord], Set<String>), Error> = Task.detached(priority: .utility) {
             var paths = Set<String>(), candidates: [URL] = []
             func add(_ url: URL) {
                 guard FileSearchQuery.allows(url), !syncContains(appData, url), !settings.excludedFolders.contains(where: { syncContains(stableChangeURL($0), url) }) else { return }
