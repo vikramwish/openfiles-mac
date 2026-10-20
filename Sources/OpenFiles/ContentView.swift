@@ -28,15 +28,18 @@ struct ContentView: View {
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 Divider().opacity(0.5)
                 HStack(spacing: 8) {
-                    if model.busy || model.indexing { ProgressView().controlSize(.mini) }
+                    if model.busy { ProgressView().controlSize(.mini) }
                     else { Image(systemName: "checkmark.circle").foregroundStyle(.secondary) }
                     Text(model.status).lineLimit(2)
                     Spacer()
-                    Text(model.indexing ? "SEMANTIC INDEXING" : "ON DEVICE").font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1).foregroundStyle(.secondary)
+                    Button { model.showingIndexing = true } label: {
+                        Label(model.indexing ? "\(model.indexProgress.processed)/\(model.indexProgress.discovered) · \(model.indexProgress.phase == .paused ? "Paused" : "Indexing")" : "Indexing details", systemImage: model.indexProgress.phase == .paused || model.indexSettings.paused ? "pause.circle" : "waveform.path")
+                    }.buttonStyle(.borderless).font(.system(size: 11)).foregroundStyle(.secondary)
                 }.font(.system(size: 11)).padding(.horizontal, 28).padding(.vertical, 12)
             }.background(Color(nsColor: .windowBackgroundColor))
         }
         .alert("OpenFiles", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) { Button("OK") { model.error = nil } } message: { Text(model.error ?? "") }
+        .sheet(isPresented: $model.showingIndexing) { IndexingView() }
         .sheet(isPresented: $model.showingGo) {
             VStack(alignment: .leading, spacing: 18) {
                 Text("Go to folder").font(.title2.weight(.semibold))
@@ -75,30 +78,47 @@ struct ContentView: View {
                 Image(systemName: "folder.fill").font(.system(size: 17)).foregroundStyle(surface).frame(width: 34, height: 34).background(Color.primary, in: RoundedRectangle(cornerRadius: 9))
                 Text("OpenFiles").font(.system(size: 18, weight: .semibold)).tracking(-0.6)
             }.padding(.bottom, 28)
-            Text("FAVORITES").font(.system(size: 10, weight: .medium)).tracking(1).foregroundStyle(.secondary).padding(.horizontal, 10).padding(.bottom, 8)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(model.locations, id: \.url) { location in
-                        locationButton(location.name, icon: location.icon, url: location.url)
-                    }
-                    if !model.volumes.isEmpty {
-                        Text("LOCATIONS").font(.system(size: 10, weight: .medium)).tracking(1).foregroundStyle(.secondary).padding(.horizontal, 10).padding(.top, 22).padding(.bottom, 6)
-                        ForEach(model.volumes, id: \.self) { url in locationButton(url.lastPathComponent, icon: "externaldrive", url: url) }
-                    }
-                    let cloud = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs", isDirectory: true)
-                    if FileManager.default.fileExists(atPath: cloud.path) { locationButton("iCloud Drive", icon: "icloud", url: cloud) }
-                }
-            }
-            Divider().padding(.vertical, 15)
-            ForEach(AppModel.Section.allCases.filter { $0 != .files }) { section in
+            Button {
+                model.showSearch?()
+            } label: {
+                HStack { Image(systemName: "square.and.pencil"); Text("Search files"); Spacer(); Text("⌘⇧Space").foregroundStyle(.tertiary) }
+                    .font(.system(size: 12, weight: .medium)).padding(11)
+                    .background(surface, in: RoundedRectangle(cornerRadius: 8))
+            }.buttonStyle(.plain).padding(.bottom, 14)
+            ForEach(AppModel.Section.allCases) { section in
                 Button { model.section = section } label: {
                     HStack(spacing: 11) { Image(systemName: section.icon).frame(width: 18); Text(section.rawValue); Spacer() }
                         .font(.system(size: 12)).padding(.horizontal, 11).padding(.vertical, 10)
                         .background(model.section == section ? Color.primary.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 7)).contentShape(Rectangle())
                 }.buttonStyle(.plain)
             }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 3) {
+                    sidebarCaption("LOCATIONS")
+                    ForEach(model.locations, id: \.url) { location in
+                        locationButton(location.name, icon: location.icon, url: location.url)
+                    }
+                    ForEach(model.volumes, id: \.self) { url in locationButton(url.lastPathComponent, icon: "externaldrive", url: url) }
+                    let cloud = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs", isDirectory: true)
+                    if FileManager.default.fileExists(atPath: cloud.path) { locationButton("iCloud Drive", icon: "icloud", url: cloud) }
+                }
+            }.padding(.top, 12)
+            Button { model.showingIndexing = true } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: model.indexSettings.paused ? "pause.circle" : "waveform.path")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(model.indexSettings.paused ? "Indexing paused" : model.indexing ? "Indexing files" : "Indexing activity").font(.system(size: 11, weight: .medium))
+                        Text(model.indexing ? "\(model.indexProgress.processed) of \(model.indexProgress.discovered) · \(model.indexProgress.reused) reused" : "Progress, exclusions & controls").font(.system(size: 9)).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }.padding(10).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
+            }.buttonStyle(.plain).padding(.top, 12)
             Label("On this Mac. By default.", systemImage: "lock.circle").font(.system(size: 10)).foregroundStyle(.secondary).padding(.horizontal, 8).padding(.top, 20)
         }.padding(.horizontal, 16).padding(.top, 42).padding(.bottom, 18).background(Color(nsColor: .underPageBackgroundColor).opacity(0.4))
+    }
+    private func sidebarCaption(_ title: String) -> some View {
+        Text(title).font(.system(size: 9, weight: .semibold)).tracking(1).foregroundStyle(.tertiary)
+            .padding(.horizontal, 10).padding(.top, 18).padding(.bottom, 7)
     }
     private func locationButton(_ title: String, icon: String, url: URL) -> some View {
         Button { model.navigate(to: url) } label: {
@@ -122,7 +142,22 @@ struct ContentView: View {
             }.padding(.horizontal, 30).padding(.top, 38).padding(.bottom, 25)
         }
     }
-    private var files: some View { BrowserView() }
+    private var files: some View {
+        HStack(spacing: 0) {
+            BrowserView().frame(minWidth: 420)
+            if let item = model.selectedItem {
+                Divider()
+                if item.sensitive {
+                    VStack(spacing: 12) {
+                        Label("Version history unavailable", systemImage: "lock.shield")
+                        Text("Potentially sensitive files are excluded from history. Use the private vault.").font(.caption).foregroundStyle(.secondary)
+                    }.padding(20).frame(width: 280)
+                } else {
+                    VersionHistoryView(url: item.url).id(item.url).frame(width: 300)
+                }
+            }
+        }
+    }
     private var organization: some View {
         VStack(alignment: .leading, spacing: 24) {
             InfoCard(symbol: "tray.2", title: "A calmer Downloads folder", text: "Sort top-level files into Organized / Documents, Images, Audio, Video, and Archives. Projects and potentially sensitive files stay in place. Existing files are never overwritten.")
@@ -161,11 +196,14 @@ struct ContentView: View {
                         VStack(alignment: .leading, spacing: 5) { Text(version.message).font(.system(size: 13, weight: .medium)); Text(version.name).font(.system(size: 11)).foregroundStyle(.secondary) }
                         Spacer()
                         VStack(alignment: .trailing, spacing: 5) { Text(version.created, style: .date); Text(String(version.id.uuidString.prefix(8))).font(.system(size: 10, design: .monospaced)) }.font(.system(size: 11)).foregroundStyle(.secondary)
-                        Button("Restore copy…") { model.export(version) }.buttonStyle(.bordered)
+                        Menu("Restore") {
+                            Button("Open restored copy…") { model.restoreAndOpen(version) }
+                            Button("Export copy…") { model.export(version) }
+                        }
                     }.padding(.vertical, 12)
                 }.listStyle(.inset).clipShape(RoundedRectangle(cornerRadius: 9))
             }
-            Text("Save all linked assets with the project. Automatic active-document detection and app-specific save hooks are planned.").font(.system(size: 11)).foregroundStyle(.secondary)
+            Text("Open a file from OpenFiles to keep a floating version panel beside its editor. Save in the editor before committing.").font(.system(size: 11)).foregroundStyle(.secondary)
             Spacer(minLength: 0)
         }.padding(30).disabled(model.busy)
     }

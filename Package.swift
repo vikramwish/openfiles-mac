@@ -7,6 +7,7 @@ let package = Package(
     targets: [
         .target(name: "OpenFilesCore"),
         .executableTarget(name: "OpenFiles", dependencies: ["OpenFilesCore"]),
+        .executableTarget(name: "OpenFilesBenchmark", dependencies: ["OpenFilesCore"], path: "Benchmarks/OpenFilesBenchmark"),
         .executableTarget(name: "OpenFilesChecks", dependencies: ["OpenFilesCore"], path: "Tests/OpenFilesChecks")
     ]
 )

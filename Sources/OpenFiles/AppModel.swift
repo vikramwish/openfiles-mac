@@ -15,12 +15,19 @@ final class AppModel: ObservableObject {
     @Published var commitTarget: URL?
     @Published var showingCommit = false
     @Published var section: Section = .files
+    var showSearch: (() -> Void)?
+    var showWorkspace: (() -> Void)?
     @Published var currentFolder = FileManager.default.homeDirectoryForCurrentUser
     @Published var browserItems: [BrowserItem] = []
     @Published var selectedURL: URL?
     @Published var folderError: String?
     @Published var loadingFolder = false
     @Published var indexing = false
+    @Published var indexProgress = IndexProgress()
+    @Published var indexSettings = IndexSettings()
+    @Published var showingIndexing = false
+    @Published var indexScopes: [URL] = []
+    private var indexProgressTask: Task<Void, Never>?
     @Published var searchingSystem = false
     @Published var searchResultCount = 0
     @Published var searchThisFolder = false { didSet { search() } }
@@ -30,6 +37,50 @@ final class AppModel: ObservableObject {
     @Published var showingNewFolder = false
     @Published var newFolderName = ""
     @Published var previewItem: BrowserItem?
+    @Published var editingURL: URL?
+    private var versionPanel: NSPanel?
+
+    func showVersionPanel(for url: URL) {
+        editingURL = url
+        if versionPanel == nil {
+            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 580),
+                                styleMask: [.titled, .closable, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.title = "OpenFiles · Versions"
+            panel.level = .floating
+            panel.hidesOnDeactivate = false
+            panel.isReleasedWhenClosed = false
+            panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+            panel.minSize = NSSize(width: 320, height: 400)
+            let hosting = NSHostingView(rootView: EditingVersionsView().environmentObject(self))
+            hosting.sizingOptions = []
+            hosting.frame = NSRect(x: 0, y: 0, width: 340, height: 580)
+            hosting.autoresizingMask = [.width, .height]
+            panel.contentView = hosting
+            panel.setContentSize(NSSize(width: 340, height: 580))
+            panel.center()
+            versionPanel = panel
+        }
+        versionPanel?.orderFrontRegardless()
+    }
+    func commitFile(_ url: URL, message: String) {
+        Task { await perform {
+            self.state = try await self.library.commit(url, message: message)
+            self.status = "Version saved for \(url.lastPathComponent)."
+        } }
+    }
+    func restoreAndOpen(_ version: FileVersion) {
+        let panel = NSOpenPanel()
+        panel.title = "Open an earlier version"
+        panel.message = "Choose where to save the restored copy. Your current file stays unchanged. Save in your editor before switching."
+        panel.canChooseDirectories = true; panel.canChooseFiles = false
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        Task { await perform {
+            let restored = try await self.library.exportVersion(version, into: folder)
+            _ = try await NSWorkspace.shared.open(restored, configuration: .init())
+            self.showVersionPanel(for: restored)
+            self.status = "Opened restored copy of \(version.name). Original file unchanged."
+        } }
+    }
     let browser = FileBrowser()
     private let systemSearch = SystemSearch()
     private var folderItems: [BrowserItem] = []
@@ -58,7 +109,7 @@ final class AppModel: ObservableObject {
     private var searchTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
     enum Section: String, CaseIterable, Identifiable {
-        case files = "Files", organize = "Organize", history = "Version history", vault = "Private vault"
+        case files = "Browse files", organize = "Organize", history = "Version history", vault = "Private vault"
         var id: String { rawValue }
         var icon: String { switch self { case .files: "square.grid.2x2"; case .organize: "tray.2"; case .history: "clock.arrow.circlepath"; case .vault: "lock.shield" } }
         var subtitle: String { switch self { case .files: "Find the file you’re thinking of."; case .organize: "A place for everything, with you in control."; case .history: "Keep the moments that matter."; case .vault: "An encrypted home for private files." } }
@@ -86,13 +137,23 @@ final class AppModel: ObservableObject {
             self.state = try await self.library.load()
             await self.library.enableDefaultDiscovery(home: FileManager.default.homeDirectoryForCurrentUser)
             self.vaultState = await self.vault.status()
+            self.indexSettings = self.state.indexSettings ?? IndexSettings()
+            self.indexProgress = self.library.indexMonitor.snapshot()
+            self.indexScopes = await self.library.indexScopes()
         }
-        startIndexing()
+        indexProgressTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                self.indexProgress = self.library.indexMonitor.snapshot()
+                try? await Task.sleep(for: .milliseconds(300))
+            }
+        }
+        if !indexSettings.paused { startIndexing() }
         pollingTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
                 guard let self else { return }
-                if self.state.autoOrganize && !self.busy {
+                if self.state.autoOrganize && !self.busy && !self.indexing && !self.indexSettings.paused {
                     await self.perform {
                         try await self.scan()
                         _ = try await self.library.previewOrganization()
@@ -112,17 +173,43 @@ final class AppModel: ObservableObject {
         do { try await action() } catch { self.error = error.localizedDescription }
     }
     func scan() async throws {
+        indexing = true
+        defer { indexing = false; indexProgress = library.indexMonitor.snapshot() }
         let report = try await library.scan()
-        state = report.state; embeddingsAvailable = report.embeddingsAvailable; proposals = []; search()
-        status = "\(state.files.count) files indexed locally" + (report.skipped > 0 ? " · \(report.skipped) unreadable or over the 2,000-file limit" : "")
+        state = await library.current(); embeddingsAvailable = report.embeddingsAvailable; proposals = []; search()
+        indexProgress = report.progress
+        status = "\(state.files.count) files in semantic catalog · \(report.progress.reused) reused · \(report.progress.embedded) newly embedded" + (report.progress.limitReached ? " · semantic limit reached" : "")
     }
     func startIndexing() {
-        guard !indexing else { return }
+        guard !indexing, !indexSettings.paused else { return }
         indexing = true
         indexTask = Task {
-            defer { indexing = false }
+            defer { indexing = false; indexProgress = library.indexMonitor.snapshot() }
             do { try await scan() } catch { status = "Semantic indexing paused: \(error.localizedDescription)" }
         }
+    }
+    func setIndexPaused(_ paused: Bool) {
+        Task {
+            do {
+                try await library.pauseIndexing(paused); indexSettings.paused = paused
+                indexProgress = library.indexMonitor.snapshot()
+                if !paused && !indexing { startIndexing() }
+            } catch { self.error = error.localizedDescription }
+        }
+    }
+    func stopIndexing() { Task { await library.cancelIndexing() } }
+    func finishIndexingBeforeQuit() async { await library.cancelIndexing(); await indexTask?.value }
+    func updateIndexSettings(_ settings: IndexSettings) {
+        Task {
+            do { try await library.configureIndexing(settings); indexSettings = settings; state = await library.current(); search() }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+    func addIndexExclusion() {
+        let panel = NSOpenPanel(); panel.title = "Exclude folder from semantic indexing"; panel.message = "The folder stays available in browsing and Spotlight search."; panel.canChooseDirectories = true; panel.canChooseFiles = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        var settings = indexSettings
+        if !settings.excludedFolders.contains(url) { settings.excludedFolders.append(url); updateIndexSettings(settings) }
     }
     func refresh() { reloadFolder(); startIndexing() }
     func navigate(to folder: URL, recordHistory: Bool = true) {
@@ -200,7 +287,12 @@ final class AppModel: ObservableObject {
     func open(_ item: BrowserItem, reveal: Bool = false) {
         if reveal { navigate(to: item.url.deletingLastPathComponent()); selectedURL = item.url; return }
         if item.isFolder { navigate(to: item.url); return }
-        Task { do { _ = try await NSWorkspace.shared.open(item.url, configuration: .init()) } catch { self.error = error.localizedDescription } }
+        Task {
+            do {
+                _ = try await NSWorkspace.shared.open(item.url, configuration: .init())
+                if !item.sensitive { self.showVersionPanel(for: item.url) }
+            } catch { self.error = error.localizedDescription }
+        }
     }
     func openSelected() { if let item = selectedItem { open(item) } }
     func previewSelected() { if let item = selectedItem { previewItem = item } }
