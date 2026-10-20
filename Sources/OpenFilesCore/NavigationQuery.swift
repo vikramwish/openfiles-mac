@@ -55,7 +55,7 @@ public struct NavigationQuery: Sendable {
         }
         let kinds: [(String, Set<String>)] = [
             ("pdfs", ["pdf"]), ("pdf", ["pdf"]),
-            ("images", ["png", "jpg", "jpeg", "heic", "gif", "svg", "webp"]), ("photos", ["png", "jpg", "jpeg", "heic", "gif", "webp"]),
+            ("images", ["png", "jpg", "jpeg", "heic", "heif", "tif", "tiff", "gif", "bmp", "svg", "webp"]), ("pictures", ["png", "jpg", "jpeg", "heic", "heif", "tif", "tiff", "gif", "bmp", "webp"]), ("photos", ["png", "jpg", "jpeg", "heic", "gif", "webp"]),
             ("spreadsheets", ["xlsx", "xls", "csv", "numbers"]), ("presentations", ["ppt", "pptx", "key"]),
             ("videos", ["mov", "mp4", "m4v", "avi"]), ("audio", ["mp3", "wav", "m4a", "aiff", "flac"]),
             ("archives", ["zip", "gz", "tar", "dmg"])
@@ -64,7 +64,7 @@ public struct NavigationQuery: Sendable {
             let pattern = "(?<![\\w.])\(word)(?![\\w.])"
             if text.range(of: pattern, options: .regularExpression) != nil { extensions.formUnion(values); text = text.replacingOccurrences(of: pattern, with: " ", options: .regularExpression) }
         }
-        for filler in ["modified", "updated", "changed", "created", "from", "in"] {
+        for filler in ["modified", "updated", "changed", "from", "in"] {
             text = text.replacingOccurrences(of: "\\b\(filler)\\b", with: " ", options: .regularExpression)
         }
         topic = FileSearchQuery(text)
@@ -89,6 +89,7 @@ public final class SearchCatalog: @unchecked Sendable {
         var names: [String: String] = [:]
         var nameWords: [String: Set<String>] = [:]
         var documentWords: [String: Set<String>] = [:]
+        var visualWords: [String: Set<String>] = [:]
         var revision: UInt64 = 0
     }
     private let lock = NSLock()
@@ -112,6 +113,7 @@ public final class SearchCatalog: @unchecked Sendable {
         guard FileSearchQuery.allows(file.url) else { return }
         let path = file.url.path; state.files[path] = file
         let names = Set(FileSearchQuery.words(file.name)), words = names.union(file.sensitive ? [] : file.searchTerms ?? [])
+        if !file.sensitive, let visual = file.imageContent { state.visualWords[path] = visual.subjectTerms }
         state.names[path] = file.name.lowercased()
         state.nameWords[path] = names; state.documentWords[path] = words
         let metadata = Set(["#ext:" + file.url.pathExtension.lowercased()] + file.url.deletingLastPathComponent().pathComponents.map { "#folder:" + $0.lowercased() })
@@ -121,6 +123,7 @@ public final class SearchCatalog: @unchecked Sendable {
         guard let file = state.files.removeValue(forKey: path) else { return }
         let metadata = Set(["#ext:" + file.url.pathExtension.lowercased()] + file.url.deletingLastPathComponent().pathComponents.map { "#folder:" + $0.lowercased() })
         let words = state.documentWords.removeValue(forKey: path) ?? []
+        state.visualWords.removeValue(forKey: path)
         state.names.removeValue(forKey: path); state.nameWords.removeValue(forKey: path)
         for term in words.union(metadata) {
             state.postings[term]?.remove(path)
@@ -179,7 +182,8 @@ public final class SearchCatalog: @unchecked Sendable {
             }
             else if vector == nil { score = nameScore * 5 + 1 } // prefix match already grounded by postings
             else { return nil }
-            let reason = plan.topic.terms.isEmpty ? "Metadata filter" : nameScore == 1 ? "Filename matches" : "Indexed text matches"
+            let visualCoverage = plan.topic.coverage(words: snapshot.visualWords[path] ?? [])
+            let reason = plan.topic.terms.isEmpty ? "Metadata filter" : nameScore == 1 ? "Filename matches" : visualCoverage == 1 ? "Image subject match" : file.imageContent != nil ? "Image text / subject match" : "Indexed text matches"
             return (path, FileSearchMatch(file: file, score: score, reason: reason))
         }
         func better(_ a: (path: String, match: FileSearchMatch), _ b: (path: String, match: FileSearchMatch)) -> Bool {

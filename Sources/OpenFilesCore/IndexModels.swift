@@ -36,6 +36,7 @@ public struct FileIndexMetadata: Codable, Hashable, Sendable {
     public var outcome: String
     public var detail: String
     public var retryable: Bool
+    public var imageRevision: String? = nil
 }
 
 public struct IndexEvent: Codable, Identifiable, Sendable {

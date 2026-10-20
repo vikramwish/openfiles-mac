@@ -33,7 +33,8 @@ actor IndexWorker {
         do {
             try await control.checkpoint()
             guard try FileStamp.read(item.url) == item.stamp else { throw OpenFilesError.message("File changed after discovery") }
-            if var prior = item.prior, prior.searchTerms != nil, let meta = prior.indexMetadata, meta.stamp == item.stamp, meta.engine == backend.identifier, !meta.retryable, (prior.vector != nil || prior.sensitive) {
+            let imageNeedsRefresh = NativeImageContent.extensions.contains(item.url.pathExtension.lowercased()) && item.prior?.sensitive != true && item.prior?.indexMetadata?.imageRevision != NativeImageContent.revision
+            if var prior = item.prior, !imageNeedsRefresh, prior.searchTerms != nil, let meta = prior.indexMetadata, meta.stamp == item.stamp, meta.engine == backend.identifier, !meta.retryable, (prior.vector != nil || prior.sensitive || meta.imageRevision != nil) {
                 prior.url = item.url; prior.root = item.root
                 result.record = prior; result.statHit = true
                 result.event.outcome = "Unchanged"; result.event.detail = "Stat cache hit: no content read, tokenization, or inference"
@@ -59,6 +60,7 @@ actor IndexWorker {
                 return result
             }
             if text.read && text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { text.detail = "Filename only: no extractable text" }
+            record.imageContent = text.imageContent
             record.searchTerms = Array(Set(FileSearchQuery.words(text.text).prefix(6000))).sorted()
             let input = IndexText.prepare(text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? item.url.lastPathComponent : text.text)
             let key = IndexText.key(input, engine: backend.identifier), backend = self.backend
@@ -76,6 +78,7 @@ actor IndexWorker {
             record.vector = object.vector
             let outcome = object.vector == nil ? "Model unavailable" : cached ? "Content reused" : "Embedded"
             record.indexMetadata = FileIndexMetadata(stamp: item.stamp, engine: backend.identifier, objectKey: object.vector == nil ? nil : key, wordUnits: object.wordUnits, inputCharacters: object.inputCharacters, outcome: outcome, detail: text.detail, retryable: retryable)
+            if NativeImageContent.extensions.contains(item.url.pathExtension.lowercased()) { record.indexMetadata?.imageRevision = NativeImageContent.revision }
             result.record = record; result.objectHit = cached && object.vector != nil; result.tokenized = !cached
             result.embedded = !cached && object.vector != nil
             if !cached { result.wordUnits = object.wordUnits; result.tokenizationSeconds = object.tokenizationSeconds; result.embeddingSeconds = object.embeddingSeconds }

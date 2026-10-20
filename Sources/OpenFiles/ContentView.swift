@@ -138,29 +138,7 @@ struct ContentView: View {
             }
         }
     }
-    private var organization: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            InfoCard(symbol: "tray.2", title: "A calmer Downloads folder", text: "Sort top-level files into Organized / Documents, Images, Audio, Video, and Archives. Projects and potentially sensitive files stay in place. Existing files are never overwritten.")
-            Label("Manual review required. Search, sync, and smart groups never move or delete files.", systemImage: "hand.raised")
-                .font(.callout).foregroundStyle(.secondary)
-
-            HStack {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Folders to organize").font(.headline)
-                    Text("Browsing and search work everywhere. Only these folders are eligible for moves you review and apply.").font(.callout).foregroundStyle(.secondary)
-                    ForEach(model.state.roots, id: \.self) { root in
-                        HStack { Text(root.path).font(.callout); Button("Remove") { model.removeFolder(root) }.buttonStyle(.borderless) }
-                    }
-                }
-                Spacer()
-                Button("Choose folder to organize…") { model.chooseOrganizationFolder() }.buttonStyle(.bordered)
-            }
-            HStack { Text("Proposed moves").font(.headline); Spacer(); Button("Preview organization") { model.preview() }; Button("Apply \(model.proposals.count) moves") { model.applyMoves() }.buttonStyle(.borderedProminent).disabled(model.proposals.isEmpty) }.buttonStyle(.bordered)
-            if model.proposals.isEmpty { EmptyPanel(symbol: "checklist", title: "Review before you rearrange", detail: "Preview the exact destination for each file. Only files unchanged for at least 10 seconds are eligible.") }
-            else { List(model.proposals) { move in VStack(alignment: .leading, spacing: 5) { Text(move.source.lastPathComponent).font(.system(size: 12, weight: .medium)); Label(move.destination.path, systemImage: "arrow.turn.down.right").font(.caption).foregroundStyle(.secondary).lineLimit(2) }.padding(.vertical, 6) }.listStyle(.inset).clipShape(RoundedRectangle(cornerRadius: 9)) }
-            Spacer(minLength: 0)
-        }.padding(30).disabled(model.busy)
-    }
+    private var organization: some View { OrganizationView() }
     private var history: some View {
         VStack(alignment: .leading, spacing: 22) {
             InfoCard(symbol: "clock.arrow.circlepath", title: "A save point for any saved format", text: "Commit a file or complete project folder from OpenFiles or its menu bar icon. Binary files are stored as full snapshots. Restore updates the file in place and automatically saves a recovery version.")

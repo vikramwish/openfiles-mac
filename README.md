@@ -31,7 +31,19 @@ Type a filename or a request such as `find all my australian government related 
 
 Search removes conversational filler and uses grouped terms and aliases across Spotlight and the local index. Filename and document-text evidence determine inclusion; embedding similarity boosts grounded results rather than admitting unrelated files by itself. Generated folders, Python package metadata, and installer records are excluded from search results. A lack of confident matches produces an empty state instead of padding the list with weak similarities.
 
-The panel shows up to 100 merged results. Local ranking reads bounded text/PDF prefixes from up to 240 index candidates per request; Spotlight supplies additional indexed content matches, including formats supported by macOS importers. The local index and Spotlight have separate scope and availability limits. Search uses local services; no cloud language model is connected.
+The panel shows up to 100 merged results. Its primary path uses in-memory inverted postings and cached metadata: no document reads, metadata restats, or model calls are required to display the first results. Debounced embedding refinement and supplemental Spotlight topic results arrive separately. A first indexing pass is needed for content search; existing filename records remain searchable during migration. No cloud language model is connected.
+
+Natural-language navigation supports type, location, relative **modification** dates, recent-first ordering, and grouping: try `PDFs in Downloads this month`, `government files grouped by folder`, or `recent images grouped by month`. Group by folder, kind, or month and select a group chip to narrow the displayed results. The bookmark button saves the query as a live smart group; relative dates are reevaluated when it is opened. Saved groups change the view, not the files.
+
+Filesystem events feed a debounced queue for create/edit/rename/delete reconciliation. Only changed files or affected directory subtrees are processed. Paused indexing queues changes; missed events, wake, launch, and a five-minute reconciliation pass catch gaps. Sync operates while OpenFiles runs, does not download cloud placeholders, and is limited to configured/discovered scopes. New default indexes are unlimited; existing user-selected limits are preserved. The panel reports indexed count and sync state.
+
+## Image-content search
+
+Search the pixels as well as filenames: `zebra`, `images of a zebra`, or `pictures of zebras` can find a recognized zebra in a photo named `IMG_0042.jpg`. Apple Vision classifies subjects/scenes and recognizes text inside images during background indexing. Subject labels, confidence scores, and normalized OCR terms are persisted locally; queries use the same fast inverted index and label visual hits **Image subject match**.
+
+Supported raster formats are JPEG, PNG, HEIC/HEIF, TIFF, GIF (first frame), BMP, and WebP when decodable by macOS. Analysis uses an orientation-correct thumbnail capped at 2,048 pixels, files up to 50 MB, up to 12 subject labels at confidence 0.25 or higher, and bounded OCR text. Unchanged analyses are cached even when the text-embedding model is unavailable. Existing image records are refreshed automatically on a background indexing pass.
+
+This is classifier-based content search, not an unrestricted vision-language model: recognition can miss subjects or produce incorrect labels, and complex spatial/compositional descriptions are not supported. OCR-based sensitivity checks suppress derived content when they flag a file, but cannot detect every sensitive image. No images are uploaded, no source files are changed, and pixels are not reread at query time.
 
 ## Browse and search
 
@@ -39,13 +51,15 @@ Choose **Browse files** or a sidebar location to use the Finder-like browser. Th
 
 - Double-click a folder to browse it inside OpenFiles, or a file to open its default editor. Back/forward, parent-folder navigation, clickable breadcrumbs, and **Go to folder** (⌘⇧G) work without Finder.
 - **Search this Mac** searches Spotlight's indexed local volumes by filename and content. You can switch to the current folder. Results arrive while background semantic indexing is running. Search shows up to 1,000 Spotlight matches and the top 100 semantic matches; narrow your query to see other matches.
-- English semantic indexing starts automatically for your home folder, prioritizing Downloads, Documents, Desktop, Pictures, Music, and Movies. The prototype embeds up to 2,000 files; **this cap does not limit folder browsing or the scope of Spotlight search**. Apple’s model must be available for semantic results.
+- English semantic indexing starts automatically for your home folder, prioritizing Downloads, Documents, Desktop, Pictures, Music, and Movies. New indexes have no file-count cap; an optional limit is available in Indexing activity. **Index limits do not limit folder browsing or Spotlight search**. Apple’s model must be available for semantic results.
 - Select an item and press Return to open it or Space for a Quick Look preview. Right-click for preview, enclosing-folder navigation, copy path, or commit. ⌘⇧N creates a folder; ⌘⇧. toggles hidden files.
 - macOS still enforces folder permissions. Protected folders may require approval in macOS or Full Disk Access. Spotlight excludes locations the OS or user has excluded from indexing. You can still browse accessible unindexed folders directly.
 
+Use **File → New Window** (⌘N) or **New Window** in the OpenFiles menu bar menu to open another workspace. Each window keeps its own folder, selection, search, navigation history, and commit message. Indexing, version history, and vault state are shared; menu commands follow the active window. Closing one window leaves the others open.
+
 ## Organization, history, and vault
 
-Browsing/search access is separate from permission to rearrange files. In **Organize**, explicitly choose folders that may be organized, review the preview, then apply it. Only top-level files unchanged for 10 seconds are eligible. Automation remains off by default; enabling it applies only to those chosen organization targets, never every folder discovered by search.
+Browsing/search access is separate from permission to rearrange files. In **Organize**, explicitly choose folders that may be organized, review the preview, then apply it. Only top-level files unchanged for 10 seconds are eligible. Unattended organization is disabled. An old enabled setting is turned off at startup. Each physical move requires a manual preview and Apply action; search queries and saved groups cannot invoke file operations.
 
 Select a file in **Browse files** to see **Changes** and **History** in the right panel. Write a commit message, select the changes to include, and choose **Commit selected changes**. Commits use internal storage automatically: there is no destination picker or commit sheet. Unselected edits stay in the working file and remain available for a later commit.
 
@@ -80,15 +94,25 @@ The index now checks Git-style file signatures before reading content and shares
 
 All application state lives in `~/Library/Application Support/OpenFiles/`:
 
-- `library.json`: organization targets, file metadata, embedding vectors, and version metadata. No extracted document text is retained. This index is **not encrypted**; filenames, paths, and embeddings can reveal information.
+- `library.json`: organization targets, file metadata, embedding vectors, and version metadata. Normalized unique search terms from bounded document prefixes are persisted for fast lookup; full extracted text is not retained. Sensitive-classified content has no stored terms or embeddings. This index is **not encrypted**; terms, filenames, paths, and embeddings can reveal information.
 - `IndexObjects/<hash>.json`: model-versioned, content-addressed vectors and word-unit/timing metadata; extracted document text is not retained. Objects remain until future cache cleanup.
 - `Versions/<id>/`: full copies of committed files/projects. Sensitive-content checks are heuristics, not a confidentiality guarantee. Snapshots are local history, not an off-device backup.
 - `Private.sparsebundle`: AES-256 encrypted APFS disk image, 10 GB logical capacity, allocated as needed.
 - `vault-mount/`: mount point while unlocked. Vault content is accessible to the logged-in user and their processes while mounted. Passwords are not stored, logged, or passed as process arguments; there is no password recovery.
 
-No telemetry, cloud API, or automatic model download is implemented. Browsing can visit any accessible location. Spotlight search results are not persisted. Automatic semantic indexing excludes hidden files, symbolic links, common generated directories, app data, and vault content. Semantic scans default to 2,000 indexed files with a configurable 10,000/unlimited option; text extraction at 5 MB files / 12,000 characters; PDFs at 20 pages; embeddings at 4,000 characters. Native packages are treated as single projects. Sensitive detection cannot find every secret, especially in opaque binary formats.
+No telemetry, cloud API, or automatic model download is implemented. Browsing can visit any accessible location. Spotlight search results are not persisted. Automatic semantic indexing excludes hidden files, symbolic links, common generated directories, app data, and vault content. New semantic indexes default to unlimited files, with configurable 2,000/10,000 limits; text extraction at 5 MB files / 12,000 characters; PDFs at 20 pages; embeddings at 4,000 characters. Native packages are treated as single projects. Sensitive detection cannot find every secret, especially in opaque binary formats.
 
 This is an unsandboxed, locally signed developer app. macOS may ask for access to protected folders during browsing or automatic indexing. Distribution needs a stable signing identity, hardened runtime/notarization, and a decision about sandboxing and security-scoped bookmarks.
+
+## Search safety and performance
+
+Search, indexing, filesystem sync, and smart groups only read original files. They write derived index data and query definitions inside application support. Query text is never executed as shell commands or file actions. Separate manual organization and version operations retain their previews, collision checks, integrity checks, and recovery behavior. This does not promise zero software or hardware risk; local version snapshots are not an independent backup.
+
+The reproducible search benchmark uses 10,000 synthetic metadata/term records and 120 queries covering topic/prefix lookup, type/date/location filters, and all-files/recent navigation. On the development machine the fast path measured about **6.8 ms median / 25.7 ms p95**, with zero document reads or inference calls per fast query. These are core lookup timings, not end-to-end UI latency or a guarantee for larger personal libraries.
+
+```sh
+swift run --build-system native -c release OpenFilesBenchmark --search-only --count 10000
+```
 
 ## Work together
 

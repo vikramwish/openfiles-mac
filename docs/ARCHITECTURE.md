@@ -2,6 +2,8 @@
 
 ## Runtime
 
+Workspace windows are owned by `SearchPanelController` and identified independently. New Window (⌘N) creates a separate `AppModel` for navigation, selection, search, sheets, and commit drafts. These models share the service owner’s `FileLibrary` and `EncryptedVault`, mirror published library/index/vault state, and forward indexing controls to the one service owner. Version-operation locking is shared across windows. The active window supplies command routing; closing a window tears down its searches and subscriptions while the service owner continues running.
+
 `OpenFilesApp` supplies the main SwiftUI window and `MenuBarExtra`. `AppModel` is main-actor isolated and presents system panels, publishes progress/results, and owns the opt-in organization timer. Its long-running operations call `FileLibrary` and `EncryptedVault`, separate actors, so filesystem and model work stays off the UI thread.
 
 `FileBrowser` is a separate actor for direct directory listings. It accepts any accessible URL, returns folders and files independently of the index, and supports normal symlink navigation. Browsing has no 2,000-file cap. `AppModel` keeps navigation history and merges Spotlight results with semantic matches; stale directory/search callbacks are rejected using generation IDs. SwiftUI renders native file icons and embeds `QLPreviewView` for previews.

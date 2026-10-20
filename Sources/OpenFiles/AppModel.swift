@@ -1,12 +1,19 @@
 import SwiftUI
 import AppKit
+import Combine
 import OpenFilesCore
 
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var state = LibraryState()
-    @Published var proposals: [MoveProposal] = []
-    @Published var vaultState = VaultState(exists: false, mounted: false)
+    @Published var state = LibraryState() {
+        didSet { if !receivingSharedState { serviceOwner?.state = state } }
+    }
+    @Published var proposals: [MoveProposal] = [] {
+        didSet { if !receivingSharedState { serviceOwner?.proposals = proposals } }
+    }
+    @Published var vaultState = VaultState(exists: false, mounted: false) {
+        didSet { if !receivingSharedState { serviceOwner?.vaultState = vaultState } }
+    }
     @Published var query = "" { didSet { search() } }
     @Published var busy = false
     @Published var status = "Your files. A little more findable."
@@ -15,6 +22,15 @@ final class AppModel: ObservableObject {
     @Published var section: Section = .files
     var showSearch: (() -> Void)?
     var showWorkspace: (() -> Void)?
+    var newWorkspace: (() -> Void)?
+    @Published var activeWorkspace: AppModel? {
+        didSet {
+            activeCommandChanges = activeWorkspace?.objectWillChange.sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+        }
+    }
+    private var activeCommandChanges: AnyCancellable?
     @Published var currentFolder = FileManager.default.homeDirectoryForCurrentUser
     @Published var browserItems: [BrowserItem] = []
     @Published var selectedURL: URL?
@@ -68,7 +84,9 @@ final class AppModel: ObservableObject {
         }
         versionPanel?.orderFrontRegardless()
     }
-    @Published var versionBusy = false
+    @Published var versionBusy = false {
+        didSet { if !receivingSharedState { serviceOwner?.versionBusy = versionBusy } }
+    }
     @Published var versionFocus = UUID()
     func reviewCommit(_ url: URL? = nil) {
         let target = url ?? selectedItem?.url ?? editingURL
@@ -129,6 +147,10 @@ final class AppModel: ObservableObject {
 
     let library: FileLibrary
     let vault: EncryptedVault
+    private let storageDirectory: URL
+    private weak var serviceOwner: AppModel?
+    private var receivingSharedState = false
+    private var sharedSubscriptions = Set<AnyCancellable>()
     private var started = false
     private var searchTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
@@ -138,9 +160,12 @@ final class AppModel: ObservableObject {
         var icon: String { switch self { case .files: "square.grid.2x2"; case .organize: "tray.2"; case .history: "clock.arrow.circlepath"; case .vault: "lock.shield" } }
         var subtitle: String { switch self { case .files: "Find the file you’re thinking of."; case .organize: "A place for everything, with you in control."; case .history: "Keep the moments that matter."; case .vault: "An encrypted home for private files." } }
     }
-    init(directory: URL? = nil) {
-        let folder = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("OpenFiles", isDirectory: true)
-        library = FileLibrary(directory: folder); vault = EncryptedVault(directory: folder)
+    init(directory: URL? = nil, sharing owner: AppModel? = nil) {
+        let folder = directory ?? owner?.storageDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("OpenFiles", isDirectory: true)
+        storageDirectory = folder
+        serviceOwner = owner
+        library = owner?.library ?? FileLibrary(directory: folder)
+        vault = owner?.vault ?? EncryptedVault(directory: folder)
         systemSearch.onUpdate = { [weak self] urls, gathering, count in
             guard let self, !self.query.isEmpty else { return }
             let token = self.searchGeneration, update = UUID()
@@ -153,8 +178,41 @@ final class AppModel: ObservableObject {
                 self.spotlightItems = items; self.mergeSearchResults()
             }
         }
+        if let owner {
+            mirror(owner.$state, to: \.state)
+            mirror(owner.$proposals, to: \.proposals)
+            mirror(owner.$vaultState, to: \.vaultState)
+            mirror(owner.$versionBusy, to: \.versionBusy)
+            mirror(owner.$indexing, to: \.indexing)
+            mirror(owner.$indexProgress, to: \.indexProgress)
+            mirror(owner.$indexSettings, to: \.indexSettings)
+            mirror(owner.$indexScopes, to: \.indexScopes)
+            mirror(owner.$embeddingsAvailable, to: \.embeddingsAvailable)
+            mirror(owner.$syncStatus, to: \.syncStatus)
+            showSearch = owner.showSearch
+            owner.$state.map { $0.versions.count }.removeDuplicates().dropFirst().sink { [weak self] _ in
+                self?.reloadFolder()
+            }.store(in: &sharedSubscriptions)
+            owner.$syncStatus.removeDuplicates().dropFirst().sink { [weak self] _ in
+                self?.reloadFolder()
+            }.store(in: &sharedSubscriptions)
+        }
+    }
+    private func mirror<Value>(_ publisher: Published<Value>.Publisher, to keyPath: ReferenceWritableKeyPath<AppModel, Value>) {
+        publisher.sink { [weak self] value in
+            guard let self else { return }
+            self.receivingSharedState = true
+            self[keyPath: keyPath] = value
+            self.receivingSharedState = false
+        }.store(in: &sharedSubscriptions)
+    }
+    func closeWorkspace() {
+        browseTask?.cancel(); searchTask?.cancel(); systemSearch.stop()
+        versionPanel?.close(); versionPanel?.contentView = nil; versionPanel = nil
+        sharedSubscriptions.removeAll()
     }
     func start() async {
+        if serviceOwner != nil { navigate(to: currentFolder); return }
         guard !started else { return }; started = true
         navigate(to: currentFolder)
         await perform {
@@ -179,7 +237,7 @@ final class AppModel: ObservableObject {
             var ticks = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
-                guard let self else { return }
+                guard let self, !Task.isCancelled else { return }
                 ticks += 1
                 if ticks % 5 == 0 && !self.indexing && !self.indexSettings.paused { self.queueSync([], reconcile: true) }
 
@@ -193,6 +251,7 @@ final class AppModel: ObservableObject {
         do { try await action() } catch { self.error = error.localizedDescription }
     }
     func scan() async throws {
+        if let serviceOwner { try await serviceOwner.scan(); return }
         indexing = true
         defer { indexing = false; indexProgress = library.indexMonitor.snapshot() }
         let report = try await library.scan()
@@ -202,6 +261,7 @@ final class AppModel: ObservableObject {
         status = "\(state.files.count) files in semantic catalog · \(report.progress.reused) reused · \(report.progress.embedded) newly embedded" + (report.progress.limitReached ? " · semantic limit reached" : "")
     }
     func startIndexing() {
+        if let serviceOwner { serviceOwner.startIndexing(); return }
         guard !indexing, !indexSettings.paused else { return }
         indexing = true
         indexTask = Task {
@@ -210,6 +270,7 @@ final class AppModel: ObservableObject {
         }
     }
     func setIndexPaused(_ paused: Bool) {
+        if let serviceOwner { serviceOwner.setIndexPaused(paused); return }
         Task {
             do {
                 try await library.pauseIndexing(paused); indexSettings.paused = paused
@@ -220,7 +281,8 @@ final class AppModel: ObservableObject {
     }
     func stopIndexing() { Task { await library.cancelIndexing() } }
     func finishIndexingBeforeQuit() async {
-        fileWatcher?.stop(); syncTask?.cancel()
+        fileWatcher?.stop(); pollingTask?.cancel(); indexProgressTask?.cancel(); syncTask?.cancel()
+        pendingChanges = []; needsReconciliation = false
         if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
         await library.cancelIndexing(); await syncTask?.value; await indexTask?.value; await library.waitForIndexingToStop()
     }
@@ -271,6 +333,7 @@ final class AppModel: ObservableObject {
         }
     }
     func updateIndexSettings(_ settings: IndexSettings) {
+        if let serviceOwner { serviceOwner.updateIndexSettings(settings); return }
         Task {
             do { try await library.configureIndexing(settings); indexSettings = settings; state = await library.current(); search() }
             catch { self.error = error.localizedDescription }

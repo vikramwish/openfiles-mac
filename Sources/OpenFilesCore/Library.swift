@@ -7,13 +7,15 @@ public actor FileLibrary {
     public let directory: URL
     var state = LibraryState()
     private var proposals: [MoveProposal] = []
+    var semanticOrganizationPlan: OrganizationPreview?
+    var semanticOrganizationGeneration = UUID()
     private var discoveryRoots: [URL] = []
     private let fm = FileManager.default
     public nonisolated let searchCatalog = SearchCatalog()
     public nonisolated let indexMonitor = IndexMonitor()
     private let objects: EmbeddingObjects
     private let embeddingFactory: @Sendable () -> any EmbeddingBackend
-    private let queryBackend: any EmbeddingBackend
+    let queryBackend: any EmbeddingBackend
     private var queryCache: [String: [Double]] = [:]
     private var scanRunning = false
     private var control: IndexControl?

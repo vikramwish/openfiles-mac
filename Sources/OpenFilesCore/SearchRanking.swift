@@ -23,7 +23,9 @@ public struct FileSearchQuery: Sendable {
             case "photos", "pictures", "images": return ["photo", "photos", "picture", "pictures", "image", "images", "jpg", "jpeg", "png", "heic"]
             case "invoices", "invoice": return ["invoice", "invoices"]
             case "receipts", "receipt": return ["receipt", "receipts"]
-            default: return [term]
+            default:
+                if term.count > 3 && term.hasSuffix("s") && !term.hasSuffix("ss") { return [term, String(term.dropLast())] }
+                return [term]
             }
         }
         tokenGroups = groups.map { $0.map(Self.words) }

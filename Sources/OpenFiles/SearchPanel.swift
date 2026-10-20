@@ -199,18 +199,21 @@ final class GlobalSearchShortcut {
 }
 
 @MainActor
-final class SearchPanelController {
+final class SearchPanelController: NSObject, NSWindowDelegate {
     let store: SearchStore
     private let panel: SearchPanel
     private let shortcut = GlobalSearchShortcut()
     private let model: AppModel
-    private var browserWindow: NSWindow?
+    private var workspaces: [ObjectIdentifier: (window: NSWindow, model: AppModel)] = [:]
+    private weak var lastWorkspace: NSWindow?
+    var activeWorkspaceChanged: ((AppModel?) -> Void)?
     private var previewWindow: NSWindow?
     private var previousApp: NSRunningApplication?
     init(model: AppModel) {
         self.model = model
         store = SearchStore(model: model)
         panel = SearchPanel(contentRect: NSRect(x: 0, y: 0, width: 740, height: 240), styleMask: [.borderless], backing: .buffered, defer: false)
+        super.init()
         panel.title = "Search OpenFiles"
         panel.level = .floating; panel.isFloatingPanel = true; panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
@@ -228,6 +231,7 @@ final class SearchPanelController {
         store.shortcutAvailable = shortcut.register()
         model.showSearch = { [weak self] in self?.show() }
         model.showWorkspace = { [weak self] in self?.showBrowser() }
+        model.newWorkspace = { [weak self] in self?.newBrowserWindow() }
     }
     func show() {
         if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
@@ -252,15 +256,51 @@ final class SearchPanelController {
         panel.setFrame(NSRect(x: panel.frame.minX, y: max(visible.minY + 20, top - height), width: panel.frame.width, height: height), display: true)
     }
     func showBrowser() {
-        hide()
-        if browserWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1260, height: 820), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
-            window.title = "OpenFiles"; window.titlebarAppearsTransparent = true; window.titleVisibility = .hidden
-            window.minSize = NSSize(width: 980, height: 680); window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: ContentView().environmentObject(model))
-            window.center(); browserWindow = window
+        hide(returnFocus: false)
+        if let window = lastWorkspace, workspaces[ObjectIdentifier(window)] != nil {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
+        } else { newBrowserWindow() }
+    }
+    func newBrowserWindow(folder: URL? = nil) {
+        hide(returnFocus: false)
+        let previous = lastWorkspace.flatMap { workspaces[ObjectIdentifier($0)]?.model }
+        let workspace = AppModel(sharing: model)
+        workspace.navigate(to: folder ?? previous?.currentFolder ?? model.currentFolder)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1260, height: 820), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.title = "OpenFiles"; window.titlebarAppearsTransparent = true
+        window.minSize = NSSize(width: 980, height: 680); window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.tabbingMode = .disallowed
+        window.contentView = NSHostingView(rootView: ContentView().environmentObject(workspace))
+        workspace.showWorkspace = { [weak window] in
+            guard let window else { return }
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
         }
-        NSApp.activate(ignoringOtherApps: true); browserWindow?.makeKeyAndOrderFront(nil)
+        workspace.newWorkspace = { [weak self, weak workspace] in self?.newBrowserWindow(folder: workspace?.currentFolder) }
+        if let previous = lastWorkspace {
+            window.cascadeTopLeft(from: NSPoint(x: previous.frame.minX + 24, y: previous.frame.maxY - 24))
+        } else { window.center() }
+        workspaces[ObjectIdentifier(window)] = (window, workspace)
+        lastWorkspace = window
+        activeWorkspaceChanged?(workspace)
+        NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
+    }
+    func windowDidBecomeMain(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, let entry = workspaces[ObjectIdentifier(window)] else { return }
+        lastWorkspace = window
+        activeWorkspaceChanged?(entry.model)
+    }
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              let entry = workspaces.removeValue(forKey: ObjectIdentifier(window)) else { return }
+        entry.model.closeWorkspace()
+        window.contentView = nil
+        if lastWorkspace === window {
+            lastWorkspace = workspaces.values.first?.window
+            activeWorkspaceChanged?(lastWorkspace.flatMap { workspaces[ObjectIdentifier($0)]?.model })
+        }
     }
     private func showPreview() {
         guard let item = store.selectedItem else { return }
@@ -274,7 +314,10 @@ final class SearchPanelController {
         previewWindow?.contentView = NSHostingView(rootView: FilePreview(url: item.url))
         NSApp.activate(ignoringOtherApps: true); previewWindow?.makeKeyAndOrderFront(nil)
     }
-    func shutdown() { shortcut.unregister(); store.stop() }
+    func shutdown() {
+        shortcut.unregister(); store.stop()
+        for entry in workspaces.values { entry.model.closeWorkspace() }
+    }
 }
 
 private struct SearchPanelView: View {
@@ -358,7 +401,8 @@ private struct SearchPanelView: View {
             }
             Divider().opacity(0.6)
             HStack(spacing: 12) {
-                Image(systemName: "externaldrive"); Text(store.syncSummary).lineLimit(1)
+                Image(systemName: "lock.shield").help("Search, sync, and smart groups only read original files").accessibilityLabel("Read-only file search")
+                Text(store.syncSummary).lineLimit(1)
                 if !store.shortcutAvailable { Text("Shortcut unavailable — use menu bar").foregroundStyle(.secondary) }
                 Spacer()
                 if store.hasQuery { Text("↑↓ select   ↵ open").foregroundStyle(.secondary) }
