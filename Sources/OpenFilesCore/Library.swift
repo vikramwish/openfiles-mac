@@ -13,6 +13,8 @@ public actor FileLibrary {
     private let fm = FileManager.default
     public nonisolated let searchCatalog = SearchCatalog()
     public nonisolated let indexMonitor = IndexMonitor()
+    private var checkpoints: IndexCheckpointStore
+    private let features = TextFeatureCache()
     private let objects: EmbeddingObjects
     private let embeddingFactory: @Sendable () -> any EmbeddingBackend
     let queryBackend: any EmbeddingBackend
@@ -22,15 +24,17 @@ public actor FileLibrary {
     private var phaseBeforePause: IndexProgress.Phase = .indexing
     public init(directory: URL, embeddingFactory: @escaping @Sendable () -> any EmbeddingBackend = { NativeEmbeddingBackend() }) {
         self.directory = directory.canonical
+        self.checkpoints = IndexCheckpointStore(directory: directory.canonical)
         self.objects = EmbeddingObjects(directory: directory.canonical.appendingPathComponent("IndexObjects", isDirectory: true))
         self.embeddingFactory = embeddingFactory; self.queryBackend = embeddingFactory()
     }
     private var manifest: URL { directory.appendingPathComponent("library.json") }
 
-    public func load() async throws -> LibraryState {
+    public func load(hydrateVectors: Bool = true) async throws -> LibraryState {
         try fm.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         if fm.fileExists(atPath: manifest.path) { state = try JSONDecoder().decode(LibraryState.self, from: Data(contentsOf: manifest)) }
-        for index in state.files.indices {
+        try checkpoints.replay(into: &state)
+        for index in state.files.indices where hydrateVectors {
             if let meta = state.files[index].indexMetadata, let key = meta.objectKey {
                 state.files[index].vector = await objects.lookup(key, engine: meta.engine)?.vector
             }
@@ -43,6 +47,7 @@ public actor FileLibrary {
     func save() throws {
         try JSONEncoder().encode(state).write(to: manifest, options: .atomic)
         try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifest.path)
+        try checkpoints.compacted()
     }
     /// Search scope is separate from explicit organization targets. Discovery never authorizes moves.
     public func enableDefaultDiscovery(home: URL) {
@@ -51,6 +56,9 @@ public actor FileLibrary {
     }
     public func addRoot(_ url: URL) throws {
         let root = url.canonical
+        if let library = FileRules.photoLibrary(containing: root), library != root {
+            throw OpenFilesError.message("Choose the Photos library itself or its containing folder. Photos manages the files inside it.")
+        }
         guard try root.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else { throw OpenFilesError.message("Choose a folder.") }
         guard !FileRules.contains(root, directory), !FileRules.contains(directory, root) else { throw OpenFilesError.message("Choose a folder outside OpenFiles app data.") }
         guard !state.roots.contains(where: { FileRules.contains($0, root) || FileRules.contains(root, $0) }) else { throw OpenFilesError.message("This folder overlaps a folder already in your library.") }
@@ -106,9 +114,9 @@ public actor FileLibrary {
         let settings = state.indexSettings ?? IndexSettings(), control = IndexControl(paused: (state.indexSettings ?? IndexSettings()).paused)
         self.control = control
         defer { scanRunning = false; self.control = nil }
-        let roots = state.roots + discoveryRoots, prior = state.files, appData = directory, objects = objects, factory = embeddingFactory, monitor = indexMonitor
+        let roots = state.roots + discoveryRoots, prior = state.files, appData = directory, objects = objects, features = features, factory = embeddingFactory, monitor = indexMonitor
         let job = Task.detached(priority: .utility) {
-            try await IndexPipeline.run(roots: roots, prior: prior, appData: appData, settings: settings, objects: objects, factory: factory, control: control, monitor: monitor) { records, progress in
+            try await IndexPipeline.run(roots: roots, prior: prior, appData: appData, settings: settings, objects: objects, features: features, factory: factory, control: control, monitor: monitor) { records, progress in
                 try await self.receiveIndexCheckpoint(records, progress: progress)
             }
         }
@@ -127,13 +135,13 @@ public actor FileLibrary {
     }
 
     private func receiveIndexCheckpoint(_ records: [FileRecord], progress: IndexProgress) throws {
+        try checkpoints.append(records, progress: progress)
         var merged = Dictionary(state.files.map { ($0.url.standardizedFileURL.path, $0) }, uniquingKeysWith: { first, _ in first })
         let exclusions = (state.indexSettings ?? IndexSettings()).excludedFolders
         for file in records where !exclusions.contains(where: { FileRules.contains($0.canonical, file.url.canonical) }) { merged[file.url.standardizedFileURL.path] = file }
         state.files = merged.values.sorted { $0.url.path < $1.url.path }
         searchCatalog.upsert(records.filter { file in !exclusions.contains { FileRules.contains($0.canonical, file.url.canonical) } })
         state.lastIndexReport = progress.persistedSummary
-        try save()
     }
     public func search(_ query: String) async -> [FileRecord] {
         await searchMatches(query).map(\.file)
@@ -149,6 +157,15 @@ public actor FileLibrary {
             vector = await queryBackend.vector(for: q).map(VectorMath.normalized)
             if let vector { if queryCache.count >= 32 { queryCache.removeAll(keepingCapacity: true) }; queryCache[q] = vector }
         }
+        // First-response search is purely lexical. Load only this query's cached vector
+        // candidates for refinement instead of reading every vector at app launch.
+        var hydrated: [FileRecord] = []
+        for match in searchCatalog.matches(input, limit: 256) where match.file.vector == nil && !match.file.sensitive {
+            guard let meta = match.file.indexMetadata, meta.engine == queryBackend.identifier, let key = meta.objectKey,
+                  let object = await objects.lookup(key, engine: meta.engine) else { continue }
+            var file = match.file; file.vector = object.vector; hydrated.append(file)
+        }
+        if !hydrated.isEmpty { searchCatalog.upsert(hydrated) }
         return searchCatalog.matches(input, vector: vector, engine: queryBackend.identifier)
     }
     public func saveSmartCollection(_ query: String) throws -> [SmartCollection] {
@@ -169,7 +186,7 @@ public actor FileLibrary {
         defer { scanRunning = false; self.control = nil }
         let scopes = (state.roots + discoveryRoots).map(stableChangeURL), appData = stableChangeURL(directory)
         let prior = Dictionary(state.files.map { (stableChangeURL($0.url).path, $0) }, uniquingKeysWith: { first, _ in first })
-        let worker = IndexWorker(backend: embeddingFactory(), objects: objects)
+        let worker = IndexWorker(backend: embeddingFactory(), objects: objects, features: features)
         let job = Task.detached(priority: .utility) {
             var paths = Set<String>(), candidates: [URL] = []
             func add(_ url: URL) {
@@ -177,12 +194,12 @@ public actor FileLibrary {
                 guard scopes.contains(where: { syncContains($0, url) }), paths.insert(url.path).inserted else { return }
                 var ancestor = url.deletingLastPathComponent()
                 while scopes.contains(where: { syncContains($0, ancestor) }) {
-                    if FileManager.default.fileExists(atPath: ancestor.appendingPathComponent("pyvenv.cfg").path) { return }
+                    if FileManager.default.fileExists(atPath: ancestor.appendingPathComponent("pyvenv.cfg").path) || GeneratedDocumentation.contains(ancestor) { return }
                     if ancestor.path == "/" { break }; ancestor.deleteLastPathComponent()
                 }
-                if FileManager.default.fileExists(atPath: url.appendingPathComponent("pyvenv.cfg").path) { return }
+                if FileManager.default.fileExists(atPath: url.appendingPathComponent("pyvenv.cfg").path) || GeneratedDocumentation.contains(url) { return }
                 candidates.append(url)
-                if let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey, .isSymbolicLinkKey]), values.isDirectory == true, values.isPackage != true, values.isSymbolicLink != true,
+                if let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey, .isSymbolicLinkKey]), values.isDirectory == true, values.isPackage != true, !FileRules.packageExtensions.contains(url.pathExtension.lowercased()), values.isSymbolicLink != true,
                    let children = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
                     for child in children { add(child) }
                 }
@@ -198,7 +215,7 @@ public actor FileLibrary {
                 }
                 let values = try url.resourceValues(forKeys: [.isSymbolicLinkKey, .isPackageKey])
                 if values.isSymbolicLink == true { for path in prior.keys where syncContains(url, URL(fileURLWithPath: path)) { removals.insert(path); if let old = prior[path] { removals.insert(old.url.path) } }; continue }
-                if directory.boolValue && values.isPackage != true { continue }
+                if directory.boolValue && values.isPackage != true && !FileRules.packageExtensions.contains(url.pathExtension.lowercased()) { continue }
                 guard let root = scopes.first(where: { syncContains($0, url) }) else { continue }
                 let stamp = try FileStamp.read(url)
                 let result = await worker.process(Candidate(url: url, root: root, stamp: stamp, project: directory.boolValue, prior: prior[url.path]), control: control)
@@ -257,7 +274,7 @@ public actor FileLibrary {
     }
     public func previewOrganization() throws -> [MoveProposal] {
         proposals = []
-        for file in state.files where state.roots.contains(where: { $0.canonical.path == file.root.canonical.path }) && !file.sensitive && !file.isProject && file.url.deletingLastPathComponent().canonical.path == file.root.canonical.path && Date().timeIntervalSince(file.modified) > 10 {
+        for file in state.files where FileRules.photoLibrary(containing: file.url.canonical) == nil && state.roots.contains(where: { $0.canonical.path == file.root.canonical.path }) && !file.sensitive && !file.isProject && file.url.deletingLastPathComponent().canonical.path == file.root.canonical.path && Date().timeIntervalSince(file.modified) > 10 {
             let source = try authorized(file.url)
             proposals.append(MoveProposal(id: file.id, source: source, destination: file.root.appendingPathComponent("Organized/\(file.category)/\(file.name)"), digest: try FileIntegrity.digest(source)))
         }
@@ -280,6 +297,9 @@ public actor FileLibrary {
         for move in plan {
             do {
                 let source = try authorized(move.source)
+                guard FileRules.photoLibrary(containing: source.canonical) == nil else {
+                    throw OpenFilesError.message("Photos manages this library. Its contents stay in place.")
+                }
                 guard try FileIntegrity.digest(source) == move.digest else { throw OpenFilesError.message("Changed since preview; skipped.") }
                 // Re-check sensitive content so a changed classification cannot bypass protection.
                 try checkSnapshotEligibility(source)

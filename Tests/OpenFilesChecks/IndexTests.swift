@@ -34,11 +34,87 @@ struct IndexChecks {
         ("File-change race rejects stale inference", changingSource),
         ("Index limits and user exclusions are reported", exclusions),
         ("Legacy inline index and summary migrations", legacyMigration),
-        ("Vector math is normalized and numerically consistent", vectorMath)
+        ("Vector math is normalized and numerically consistent", vectorMath),
+        ("Filename-only files stay searchable without inference and reuse metadata", metadataOnly),
+        ("Personal documents precede source code and generated docs stay out", workPriority),
+        ("Completed checkpoints recover from the journal before a large pass finishes", partialCatalog),
+        ("Lazy vector startup preserves search and hydrates cache without inference", lazyStartup)
     ]
     static func wait(_ condition: () async -> Bool) async throws {
         for _ in 0..<300 { if await condition() { return }; try await Task.sleep(for: .milliseconds(10)) }
         throw OpenFilesError.message("Timed out waiting for index state")
+    }
+    static func metadataOnly() async throws {
+        let f = try IndexFixture(); defer { f.cleanup() }; let counter = InferenceCounter()
+        _ = try f.write("Presentation.pptx", "opaque bytes")
+        _ = try f.write("Empty.txt", "")
+        try FileManager.default.createDirectory(at: f.root.appendingPathComponent("Song.band"), withIntermediateDirectories: true)
+        let library = FileLibrary(directory: f.data, embeddingFactory: { TestEmbeddingBackend(counter) })
+        _ = try await library.load(); try await library.addRoot(f.root)
+        let cold = try await library.scan()
+        checkEqual(cold.state.files.count, 3); checkEqual(cold.progress.embedded, 0)
+        let calls = await counter.count; checkEqual(calls, 0)
+        checkTrue(cold.state.files.allSatisfy { $0.vector == nil && $0.indexMetadata?.outcome == "Metadata only" })
+        checkEqual(library.searchCatalog.matches("Presentation").first?.file.name, "Presentation.pptx")
+        let warm = try await library.scan()
+        checkEqual(warm.progress.statHits, 3); checkEqual(warm.progress.extracted, 0)
+        let warmCalls = await counter.count; checkEqual(warmCalls, 0)
+    }
+    static func workPriority() async throws {
+        let f = try IndexFixture(); defer { f.cleanup() }; let counter = InferenceCounter()
+        _ = try f.write("aaa-source.html", "Source code documentation")
+        _ = try f.write("zzz-personal.txt", "A personal document")
+        let generated = f.root.appendingPathComponent("GeneratedDocs")
+        try FileManager.default.createDirectory(at: generated, withIntermediateDirectories: true)
+        for name in ["doxygen.css", "dynsections.js", "generated.html"] { try "generated text".write(to: generated.appendingPathComponent(name), atomically: true, encoding: .utf8) }
+        let library = FileLibrary(directory: f.data, embeddingFactory: { TestEmbeddingBackend(counter) })
+        _ = try await library.load(); try await library.addRoot(f.root)
+        var settings = IndexSettings(); settings.workers = 1; try await library.configureIndexing(settings)
+        let report = try await library.scan()
+        checkEqual(report.progress.events.last.map { URL(fileURLWithPath: $0.path).lastPathComponent }, "GeneratedDocs")
+        let processed = report.progress.events.filter { $0.outcome != "Skipped" }.reversed()
+        checkEqual(processed.first.map { URL(fileURLWithPath: $0.path).lastPathComponent }, "zzz-personal.txt")
+        checkEqual(report.progress.skipReasons["Generated documentation"], 1)
+        checkEqual(report.state.files.count, 2)
+        _ = try await library.synchronizeChanges([generated.appendingPathComponent("generated.html")])
+        let current = await library.current(); checkEqual(current.files.count, 2)
+    }
+    static func partialCatalog() async throws {
+        let f = try IndexFixture(); defer { f.cleanup() }; let counter = InferenceCounter()
+        for index in 0..<2050 { _ = try f.write("Entry-\(index).bin", "metadata") }
+        _ = try f.write("Last-source.html", "This source document takes time to embed")
+        let library = FileLibrary(directory: f.data, embeddingFactory: { TestEmbeddingBackend(counter, delay: .seconds(3)) })
+        _ = try await library.load(); try await library.addRoot(f.root)
+        var settings = IndexSettings(); settings.workers = 1; try await library.configureIndexing(settings)
+        let task = Task { try await library.scan() }
+        try await wait { await library.current().files.count >= 2048 }
+        let running = await library.indexingIsRunning(); checkTrue(running)
+        checkTrue(!library.searchCatalog.matches("Entry").isEmpty)
+        let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: f.data.appendingPathComponent("library.json"))) as! [String: Any]
+        checkTrue((manifest["files"] as? [Any])?.isEmpty == true)
+        let recovered = FileLibrary(directory: f.data, embeddingFactory: { TestEmbeddingBackend(counter) })
+        let durable = try await recovered.load()
+        checkTrue(durable.files.count >= 2048)
+        checkTrue(!recovered.searchCatalog.matches("Entry").isEmpty)
+        let finished = try await task.value
+        checkEqual(finished.state.files.count, 2051)
+        checkFalse(FileManager.default.fileExists(atPath: f.data.appendingPathComponent("IndexCheckpoints").path))
+    }
+    static func lazyStartup() async throws {
+        let f = try IndexFixture(); defer { f.cleanup() }; let counter = InferenceCounter()
+        _ = try f.write("Launch.txt", "A product launch plan")
+        let first = FileLibrary(directory: f.data, embeddingFactory: { TestEmbeddingBackend(counter) })
+        _ = try await first.load(); try await first.addRoot(f.root); _ = try await first.scan()
+        let reopened = FileLibrary(directory: f.data, embeddingFactory: { TestEmbeddingBackend(counter) })
+        let metadata = try await reopened.load(hydrateVectors: false)
+        checkTrue(metadata.files.allSatisfy { $0.vector == nil })
+        checkEqual(reopened.searchCatalog.matches("launch").count, 1)
+        let before = await counter.count
+        let results = await reopened.searchMatches("launch")
+        checkEqual(results.count, 1); checkTrue(results.first?.file.vector != nil)
+        let after = await counter.count; checkEqual(after, before + 1) // query only
+        let warm = try await reopened.scan()
+        checkEqual(warm.progress.statHits, 1); checkEqual(warm.progress.embedded, 0); checkEqual(warm.progress.extracted, 0)
     }
     static func incremental() async throws {
         let f = try IndexFixture(); defer { f.cleanup() }; let counter = InferenceCounter()

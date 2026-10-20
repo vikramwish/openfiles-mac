@@ -5,6 +5,7 @@ import OpenFilesCore
 
 @MainActor
 final class AppModel: ObservableObject {
+    let photoLibrary = PhotoLibraryModel()
     @Published var state = LibraryState() {
         didSet { if !receivingSharedState { serviceOwner?.state = state } }
     }
@@ -158,11 +159,10 @@ final class AppModel: ObservableObject {
     private var searchTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
     enum Section: String, CaseIterable, Identifiable {
-        case cleanup = "Clean up"
-        case home = "Home", packs = "Prepare documents", files = "Browse files", cloud = "Cloud storage", organize = "Organize", history = "Version history", protection = "Automatic versions", vault = "Private vault"
+        case photos = "Photos", home = "Home", packs = "Prepare documents", files = "Browse files", cloud = "Cloud storage", organize = "Organize", cleanup = "Clean up", history = "Version history", protection = "Automatic versions", vault = "Private vault"
         var id: String { rawValue }
-        var icon: String { switch self { case .cleanup: "sparkles.rectangle.stack"; case .home: "house"; case .packs: "checklist"; case .protection: "shield.lefthalf.filled"; case .files: "square.grid.2x2"; case .cloud: "cloud"; case .organize: "tray.2"; case .history: "clock.arrow.circlepath"; case .vault: "lock.shield" } }
-        var subtitle: String { switch self { case .cleanup: "Review duplicates and files you may no longer need."; case .home: "Your files, ready for what’s next."; case .packs: "Get your paperwork ready."; case .protection: "Keep saved changes automatically."; case .files: "Find the file you’re thinking of."; case .cloud: "Browse Google Drive and OneDrive directly."; case .organize: "A place for everything, with you in control."; case .history: "Keep the moments that matter."; case .vault: "An encrypted home for private files." } }
+        var icon: String { switch self { case .photos: "photo.on.rectangle.angled"; case .cleanup: "sparkles.rectangle.stack"; case .home: "house"; case .packs: "checklist"; case .protection: "shield.lefthalf.filled"; case .files: "square.grid.2x2"; case .cloud: "cloud"; case .organize: "tray.2"; case .history: "clock.arrow.circlepath"; case .vault: "lock.shield" } }
+        var subtitle: String { switch self { case .photos: "Find, organize, and clean up photos."; case .cleanup: "Review duplicates and files you may no longer need."; case .home: "Your files, ready for what’s next."; case .packs: "Get your paperwork ready."; case .protection: "Keep saved changes automatically."; case .files: "Find the file you’re thinking of."; case .cloud: "Browse Google Drive and OneDrive directly."; case .organize: "A place for everything, with you in control."; case .history: "Keep the moments that matter."; case .vault: "An encrypted home for private files." } }
     }
     init(directory: URL? = nil, sharing owner: AppModel? = nil) {
         let folder = directory ?? owner?.storageDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("OpenFiles", isDirectory: true)
@@ -224,7 +224,7 @@ final class AppModel: ObservableObject {
         navigate(to: currentFolder)
         section = .home
         await perform {
-            self.state = try await self.library.load()
+            self.state = try await self.library.load(hydrateVectors: false)
             await self.packs.load()
             self.protection.onLibraryChange = { [weak self] state in self?.state = state }
             await self.protection.start()
@@ -236,9 +236,20 @@ final class AppModel: ObservableObject {
             self.indexScopes = await self.library.indexScopes()
         }
         indexProgressTask = Task { [weak self] in
+            var checkpoint = -1
+            var revision: UInt64? = nil
             while !Task.isCancelled {
                 guard let self else { return }
-                self.indexProgress = self.library.indexMonitor.snapshot()
+                let progress = self.library.indexMonitor.snapshot()
+                self.indexProgress = progress
+                let currentRevision = self.library.searchCatalog.revision
+                if progress.checkpointed != checkpoint || currentRevision != revision {
+                    checkpoint = progress.checkpointed; revision = currentRevision
+                    // Publish completed batches while the rest of the Mac is still scanning.
+                    self.state = await self.library.current()
+                    self.embeddingsAvailable = progress.modelAvailable
+                    if !self.query.isEmpty { self.search() }
+                }
                 try? await Task.sleep(for: .milliseconds(300))
             }
         }
@@ -277,7 +288,7 @@ final class AppModel: ObservableObject {
         indexing = true
         indexTask = Task {
             defer { indexing = false; indexProgress = library.indexMonitor.snapshot() }
-            do { try await scan() } catch { status = "Semantic indexing paused: \(error.localizedDescription)" }
+            do { try await scan() } catch { status = "Indexing needs attention: \(error.localizedDescription)" }
         }
     }
     func setIndexPaused(_ paused: Bool) {
@@ -433,10 +444,11 @@ final class AppModel: ObservableObject {
     func open(_ item: BrowserItem, reveal: Bool = false) {
         if reveal { navigate(to: item.url.deletingLastPathComponent()); selectedURL = item.url; return }
         if item.isFolder { navigate(to: item.url); return }
+        if item.kind == "Photos Library" { photoLibrary.inspect(item.url); section = .photos; return }
         Task {
             do {
                 _ = try await NSWorkspace.shared.open(item.url, configuration: .init())
-                if !item.sensitive { self.showVersionPanel(for: item.url) }
+                if !item.sensitive && item.kind != "Photos Library" { self.showVersionPanel(for: item.url) }
             } catch { self.error = error.localizedDescription }
         }
     }

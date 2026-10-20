@@ -45,7 +45,7 @@ struct BrowserView: View {
     private var sortedItems: [BrowserItem] { sortOrder.isEmpty ? model.browserItems : model.browserItems.sorted(using: sortOrder) }
     var body: some View {
         VStack(spacing: 0) {
-            if !model.query.isEmpty { BrowserToolbar(); Divider() }
+            BrowserToolbar(); Divider()
             if let error = model.folderError, model.query.isEmpty {
                 VStack(spacing: 15) {
                     Image(systemName: "folder.badge.questionmark").font(.system(size: 35, weight: .light))
@@ -59,7 +59,7 @@ struct BrowserView: View {
                 VStack(spacing: 12) {
                     Image(systemName: model.query.isEmpty ? "folder" : "magnifyingglass").font(.system(size: 35, weight: .ultraLight)).foregroundStyle(.secondary)
                     Text(model.query.isEmpty ? "This folder is empty" : model.searchingSystem ? "Searching this Mac…" : "No matching files").font(.system(size: 17, weight: .medium))
-                    Text(model.query.isEmpty ? "Create a folder or choose another location in the sidebar." : "Try a filename or describe the contents. Spotlight results depend on macOS indexing and permissions.").font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 430)
+                    Text(model.query.isEmpty ? "Create a folder or choose another location in the sidebar." : "Try a few different words, or choose another folder.").font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 430)
                 }.padding(30).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 Table(sortedItems, selection: $model.selectedURL, sortOrder: $sortOrder) {

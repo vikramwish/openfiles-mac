@@ -11,8 +11,10 @@ private let surface = Color(nsColor: .controlBackgroundColor)
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @ViewState private var columns: NavigationSplitViewVisibility = .all
-    @ViewState private var showsInspector = true
+    @ViewState private var showsInspector = false
     @ViewState private var focusSearchRequest = 0
+    @ViewState private var focusedHistory: URL?
+    @StateObject private var organizationSession = OrganizationSession()
     @StateObject private var cloudModel = CloudBrowserModel()
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
@@ -21,16 +23,33 @@ struct ContentView: View {
         } detail: {
             VStack(spacing: 0) {
                 Group {
-                    switch model.section {
-                    case .cleanup: CleanupView(model: model.cleanup)
-                    case .home: HomeView(packs: model.packs)
-                    case .packs: DocumentPacksView(packs: model.packs)
-                    case .protection: ProtectionView(model: model.protection, openHistory: { model.showVersionPanel(for: $0) })
-                    case .files: files
-                    case .cloud: CloudBrowserView(model: cloudModel)
-                    case .organize: organization
-                    case .history: history
-                    case .vault: VaultView()
+                    if model.section == .files {
+                        files
+                    } else if model.section == .cloud {
+                        CloudBrowserView(model: cloudModel)
+                    } else {
+                        HomeView(packs: model.packs) {
+                            switch model.section {
+                            case .home, .organize: OrganizationView(session: organizationSession, automaticallyAnalyze: true)
+                            case .photos: PhotoLibraryView(model: model.photoLibrary)
+                            case .cleanup: CleanupView(model: model.cleanup)
+                            case .packs: DocumentPacksView(packs: model.packs)
+                            case .protection: ProtectionView(model: model.protection, openHistory: { focusedHistory = $0; model.section = .history })
+                            case .history:
+                                if let url = focusedHistory {
+                                    VStack(spacing: 0) {
+                                        HStack {
+                                            Button("All saved versions") { focusedHistory = nil }
+                                            Spacer()
+                                            Text(url.lastPathComponent).font(.headline)
+                                        }.padding(16)
+                                        VersionHistoryView(url: url).id(url)
+                                    }
+                                } else { history }
+                            case .vault: VaultView()
+                            case .files, .cloud: EmptyView()
+                            }
+                        }
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 Divider()
@@ -39,8 +58,8 @@ struct ContentView: View {
                     Text(model.status).lineLimit(1).help(model.status)
                     Spacer(minLength: 16)
                     Button { model.showingIndexing = true } label: {
-                        Label(model.indexing ? "\(model.indexProgress.processed) of \(model.indexProgress.discovered) indexed" : "Indexing Activity", systemImage: model.indexSettings.paused ? "pause.circle" : "waveform.path")
-                    }.buttonStyle(.borderless).help("View indexing progress and controls")
+                        Label(model.indexing ? "Getting files ready…" : "File activity", systemImage: model.indexSettings.paused ? "pause.circle" : "waveform.path")
+                    }.buttonStyle(.borderless).help("See which folders OpenFiles can help with")
                 }.font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.vertical, 8)
             }.background(Color(nsColor: .textBackgroundColor))
         }
@@ -50,7 +69,6 @@ struct ContentView: View {
         .background {
             Button("Find") { focusSearchRequest += 1 }.keyboardShortcut("f").hidden()
         }
-        .onChange(of: model.selectedURL) { if model.selectedURL != nil { showsInspector = true } }
         .onChange(of: model.versionFocus) { showsInspector = true }
         .alert("OpenFiles", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) { Button("OK") { model.error = nil } } message: { Text(model.error ?? "") }
         .sheet(isPresented: $model.showingIndexing) { IndexingView() }
@@ -85,7 +103,7 @@ struct ContentView: View {
                     return current.absoluteString
                 }
             }
-            return model.section.rawValue
+            return model.section == .cloud || model.section == .files ? model.section.rawValue : AppModel.Section.home.rawValue
         }, set: { value in
             guard let value else { return }
             if let section = AppModel.Section(rawValue: value) { model.section = section }
@@ -95,10 +113,10 @@ struct ContentView: View {
     private var cloudFolder: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs", isDirectory: true) }
     private var sidebar: some View {
         List(selection: sidebarSelection) {
-            Section("OpenFiles") {
-                ForEach(AppModel.Section.allCases) { section in
-                    Label(section.rawValue, systemImage: section.icon).tag(section.rawValue)
-                }
+            Section {
+                Label("Workspace", systemImage: "sparkles").tag(AppModel.Section.home.rawValue)
+                Label("Browse files", systemImage: "folder").tag(AppModel.Section.files.rawValue)
+                Label("Cloud storage", systemImage: "cloud").tag(AppModel.Section.cloud.rawValue)
             }
             Section("Favorites") {
                 ForEach(model.locations, id: \.url) { location in
@@ -123,10 +141,10 @@ struct ContentView: View {
             Button { model.showingIndexing = true } label: {
                 HStack(spacing: 8) {
                     Image(systemName: model.indexSettings.paused ? "pause.circle" : "checkmark.shield")
-                    Text(model.indexSettings.paused ? "Indexing Paused" : model.indexing ? "Indexing Files…" : "On This Mac").lineLimit(1)
+                    Text(model.indexSettings.paused ? "Updates paused" : model.indexing ? "Getting files ready…" : "File activity").lineLimit(1)
                     Spacer(minLength: 0)
                 }.font(.caption).foregroundStyle(.secondary).padding(14)
-            }.buttonStyle(.plain).help("View local indexing activity")
+            }.buttonStyle(.plain).help("Manage folder access and background updates")
         }
     }
     private var files: some View {
@@ -140,17 +158,20 @@ struct ContentView: View {
                         Text("Potentially sensitive files are excluded from history. Use the private vault.").font(.caption).foregroundStyle(.secondary)
                     }.padding(20).frame(width: 280)
                 } else {
-                    VersionHistoryView(url: item.url).id(item.url).frame(width: 340)
+                    VStack(spacing: 0) {
+                        VersionHistoryView(url: item.url).id(item.url)
+                        Divider()
+                        RelatedFilesView(url: item.url).id(item.url)
+                    }.frame(width: 340)
                 }
             }
         }
     }
-    private var organization: some View { OrganizationView() }
     private var history: some View {
         VStack(alignment: .leading, spacing: 22) {
-            InfoCard(symbol: "clock.arrow.circlepath", title: "A save point for any saved format", text: "Save a version of a file or complete project folder from OpenFiles or its menu bar icon. Binary files are stored as full snapshots. Restore updates the file in place and automatically saves a recovery version.")
+            InfoCard(symbol: "clock.arrow.circlepath", title: "Go back to an earlier version", text: "Find an earlier copy of your work and restore it. OpenFiles saves a recovery copy before replacing the current file.")
             if model.state.versions.isEmpty {
-                EmptyPanel(symbol: "clock.badge.checkmark", title: "Your first save point starts here", detail: "Save in your editor, then choose Save version. Files and project folders are supported, including opaque app formats.")
+                EmptyPanel(symbol: "clock.badge.checkmark", title: "Keep a copy you can come back to", detail: "Choose a file or folder to save a version. You can also turn on Automatic versions for important work.")
                 HStack { Button("Save file version…") { model.chooseCommit() }; Button("Save folder version…") { model.chooseCommit(project: true) } }.buttonStyle(.bordered)
             } else {
                 List(model.state.versions) { version in
@@ -158,7 +179,7 @@ struct ContentView: View {
                         Image(systemName: "point.3.connected.trianglepath.dotted").foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 5) { Text(version.message).font(.body.weight(.medium)); Text(version.name).font(.callout).foregroundStyle(.secondary) }
                         Spacer()
-                        VStack(alignment: .trailing, spacing: 5) { Text(version.created, style: .date); Text(String(version.id.uuidString.prefix(8))).font(.system(size: 10, design: .monospaced)) }.font(.callout).foregroundStyle(.secondary)
+                        VStack(alignment: .trailing, spacing: 5) { Text(version.created, style: .date); Text(version.created, style: .time) }.font(.callout).foregroundStyle(.secondary)
                         Menu("Restore") {
                             Button("Restore version") { model.restoreSavedVersion(version) }
                             Button("Export copy…") { model.export(version) }
@@ -198,7 +219,7 @@ private struct VaultView: View {
     @ViewState private var confirmation = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
-            InfoCard(symbol: "lock.shield", title: "Private means encrypted", text: "Your vault is an AES-256 encrypted APFS disk image with a 10 GB capacity that grows as needed. Its contents stay out of search and version history. Keep your password safe: there’s no reset.")
+            InfoCard(symbol: "lock.shield", title: "Private means encrypted", text: "Keep private files in a locked, encrypted space. They stay out of search and version history. Keep your password safe: it can’t be reset.")
             VStack(spacing: 20) {
                 Image(systemName: model.vaultState.mounted ? "lock.open" : "lock").font(.system(size: 38, weight: .ultraLight)).padding(.top, 12)
                 Text(model.vaultState.mounted ? "Your vault is unlocked" : model.vaultState.exists ? "Unlock your private vault" : "Create your private vault").font(.title2.weight(.semibold))
@@ -214,7 +235,7 @@ private struct VaultView: View {
                 }
                 if model.busy { ProgressView("Working with encrypted storage…").controlSize(.small) }
             }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(30).background(surface, in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(line))
-            Label("Import creates an encrypted copy. Originals remain outside the vault until you remove them. Detection is a heuristic; it cannot identify every sensitive file.", systemImage: "info.circle").font(.callout).foregroundStyle(.secondary).lineSpacing(4)
+            Label("Adding a file creates a private copy. The original stays in its current folder until you remove it.", systemImage: "info.circle").font(.callout).foregroundStyle(.secondary).lineSpacing(4)
         }.padding(30).disabled(model.busy)
     }
 }

@@ -166,3 +166,17 @@ After `make build`, create a disposable directory under `/private/tmp` and run t
 mkdir -p /private/tmp/openfiles-ui-fixture
 OPENFILES_UI_SMOKE_ROOT=/private/tmp/openfiles-ui-fixture OPENFILES_UI_SMOKE_SECTION=home build/OpenFiles.app/Contents/MacOS/OpenFiles
 ```
+
+## Reviewed cleanup
+
+Open **Clean up**, choose a local folder, then **Analyze**. The review covers existing indexed files in that folder. Equal-size files are SHA-256 hashed in the background to find identical file contents. Every duplicate group must retain at least one copy. Names, metadata, file references and importance may differ even when content hashes match. Nothing is selected automatically.
+
+Suggestions flag installers/archives in Downloads modified over 90 days ago. When compatible local content embeddings are available, they can also flag older documents similar to newer ones (cosine similarity ≥ 0.94). Similarity does not establish duplication or that a document is superseded. Age is modification time, not last use. Suggestions never trigger automatic cleanup, and no cloud AI service receives file contents.
+
+Preview/reveal files and compare suggested related documents, select individual files, then review the complete path list before **Move to Trash**. The service revalidates hashes, file identity and retained duplicates before moving. It uses macOS Trash with no permanent-delete fallback. Successful moves produce local, private-permission receipts under `Cleanup/<review-id>.json`; restore using Finder’s Trash → Put Back. Trash may be emptied by macOS or the user and is not a backup. Cleanup cannot guarantee whether app references rely on a particular path.
+
+Cleanup excludes apps/project folders, source repositories, generated/system/hidden paths, links and hard links, sensitive-classified files, protected automatic-history locations, document-pack attachments, indexing exclusions, app storage and recognized iCloud items. Other cloud-sync providers are not reliably identifiable: choose a local folder, since deletion in a synced folder may propagate. Sensitivity checks are heuristic. Reviews are bounded to 5,000 eligible indexed files, 256 MB per file, 2 GB of hashing, 100,000 semantic comparisons, 500 comparison documents, and 100 suggestions. A partial review is marked in the interface. Unindexed, changed-since-index or excluded files may be absent. No scan or deletion runs automatically.
+
+### Photos libraries
+
+OpenFiles recognizes `.photoslibrary` bundles as **Photos Library** items. Browse or find a library by name and open it in Photos. Indexing treats the library as one item, including when it is added directly; internal photos and databases are excluded from search, organization, and cleanup. Choose the library or its containing folder, rather than an internal folder. Opening a library does not start version tracking. Searching individual photos inside a Photos library is not currently supported; exported image files retain OpenFiles’ image search support.

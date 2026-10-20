@@ -31,6 +31,39 @@ func checkEqual(_ lhs: Double, _ rhs: Double, accuracy: Double, file: StaticStri
 @main
 struct Runner {
     static func main() async {
+        if CommandLine.arguments.contains("--photo-tools") {
+            for (name, scenario) in PhotoToolChecks.scenarios {
+                let previous = log.failures
+                do { try await scenario() } catch { failCheck(error.localizedDescription) }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(PhotoToolChecks.scenarios.count) photo tool scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--index") {
+            let scenarios = IndexChecks.scenarios + PipelineOptimizationChecks.scenarios
+            for (name, check) in scenarios {
+                let previous = log.failures
+                do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(scenarios.count) indexing scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--photoslibrary") {
+            do { try await NavigationChecks.photosLibraries() } catch { failCheck(error.localizedDescription) }
+            print("Photos library checks; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--cleanup") {
+            for (name, check) in CleanupChecks.scenarios {
+                let previous = log.failures
+                do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
+                print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
+            }
+            print("\(CleanupChecks.scenarios.count) cleanup scenarios; \(log.failures) failures")
+            exit(log.failures == 0 ? 0 : 1)
+        }
         if CommandLine.arguments.contains("--versions") {
             for (name, check) in VersionChecks.scenarios {
                 let previous = log.failures
@@ -62,7 +95,7 @@ struct Runner {
             catch { failCheck("\(name): \(error.localizedDescription)"); try? suite.tearDownWithError() }
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
         }
-        for (name, check) in IndexChecks.scenarios + NavigationChecks.scenarios + ImageContentChecks.scenarios + OrganizationChecks.scenarios + DocumentPackChecks.scenarios + AutomaticHistoryChecks.scenarios + CleanupChecks.scenarios {
+        for (name, check) in IndexChecks.scenarios + PipelineOptimizationChecks.scenarios + NavigationChecks.scenarios + PhotoToolChecks.scenarios + ImageContentChecks.scenarios + OrganizationChecks.scenarios + DocumentPackChecks.scenarios + AutomaticHistoryChecks.scenarios + CleanupChecks.scenarios {
             let previous = log.failures
             do { try await check() } catch { failCheck("\(name): \(error.localizedDescription)") }
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
@@ -73,7 +106,7 @@ struct Runner {
             print("\(log.failures == previous ? "PASS" : "FAIL") \(name)")
         }
         do { try await VaultChecks().testEncryptedVaultRoundTrip() } catch { failCheck("Encrypted vault: \(error.localizedDescription)") }
-        print("\(checks.count + IndexChecks.scenarios.count + VersionChecks.scenarios.count + NavigationChecks.scenarios.count + ImageContentChecks.scenarios.count + OrganizationChecks.scenarios.count + DocumentPackChecks.scenarios.count + AutomaticHistoryChecks.scenarios.count + CleanupChecks.scenarios.count) core scenarios; \(log.failures) failures")
+        print("\(checks.count + IndexChecks.scenarios.count + PipelineOptimizationChecks.scenarios.count + VersionChecks.scenarios.count + NavigationChecks.scenarios.count + PhotoToolChecks.scenarios.count + ImageContentChecks.scenarios.count + OrganizationChecks.scenarios.count + DocumentPackChecks.scenarios.count + AutomaticHistoryChecks.scenarios.count + CleanupChecks.scenarios.count) core scenarios; \(log.failures) failures")
         exit(log.failures == 0 ? 0 : 1)
     }
 }

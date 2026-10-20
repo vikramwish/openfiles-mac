@@ -97,28 +97,65 @@ public final class SearchCatalog: @unchecked Sendable {
         var files: [String: FileRecord] = [:]
         var postings: [String: Set<String>] = [:]
         var vocabulary: [String] = []
+        var recentPaths: [String] = []
         var names: [String: String] = [:]
         var nameWords: [String: Set<String>] = [:]
         var documentWords: [String: Set<String>] = [:]
         var visualWords: [String: Set<String>] = [:]
+        var metadataWords: [String: Set<String>] = [:]
+        var vectorNorms: [String: Double] = [:]
+        var vocabularyDirty = false
         var revision: UInt64 = 0
     }
     private let lock = NSLock()
+    private let writer = NSLock()
     private var state = Snapshot()
     public init() {}
     public var revision: UInt64 { lock.lock(); defer { lock.unlock() }; return state.revision }
     public var count: Int { lock.lock(); defer { lock.unlock() }; return state.files.count }
     public func replace(_ files: [FileRecord]) {
+        writer.lock(); defer { writer.unlock() }
+        lock.lock(); let previous = state; lock.unlock()
+        let allowed = files.filter { FileSearchQuery.allows($0.url) }
+        if previous.files.count == allowed.count && allowed.allSatisfy({ previous.files[$0.url.path] == $0 }) { return }
         var next = Snapshot()
-        for file in files { Self.insert(file, into: &next) }
-        next.vocabulary = next.postings.keys.sorted()
-        lock.lock(); next.revision = state.revision + 1; state = next; lock.unlock()
+        for file in allowed { Self.insert(file, into: &next) }
+        next.vocabulary = next.postings.keys.sorted(); next.vocabularyDirty = false
+        next.recentPaths = next.files.keys.sorted { Self.newer($0, than: $1, files: next.files) }
+        next.revision = previous.revision + 1
+        lock.lock(); state = next; lock.unlock()
     }
     public func upsert(_ files: [FileRecord], removing paths: Set<String> = []) {
-        lock.lock(); defer { lock.unlock() }
-        for path in paths { remove(path) }
-        for file in files { remove(file.url.path); Self.insert(file, into: &state) }
-        state.vocabulary = state.postings.keys.sorted(); state.revision += 1
+        writer.lock(); defer { writer.unlock() }
+        lock.lock(); var next = state; lock.unlock()
+        var changed = false
+        var affected = paths
+        for path in paths where next.files[path] != nil { Self.remove(path, from: &next); changed = true }
+        for file in files {
+            guard next.files[file.url.path] != file else { continue }
+            Self.remove(file.url.path, from: &next); Self.insert(file, into: &next); changed = true
+            affected.insert(file.url.path)
+        }
+        guard changed else { return }
+        if next.vocabularyDirty { next.vocabulary = next.postings.keys.sorted(); next.vocabularyDirty = false }
+        let kept = next.recentPaths.filter { !affected.contains($0) }
+        let updates = affected.filter { next.files[$0] != nil }.sorted { Self.newer($0, than: $1, files: next.files) }
+        var merged: [String] = []; merged.reserveCapacity(kept.count + updates.count)
+        var i = 0, j = 0
+        while i < kept.count && j < updates.count {
+            if Self.newer(kept[i], than: updates[j], files: next.files) { merged.append(kept[i]); i += 1 }
+            else { merged.append(updates[j]); j += 1 }
+        }
+        merged.append(contentsOf: kept.dropFirst(i)); merged.append(contentsOf: updates.dropFirst(j))
+        next.recentPaths = merged
+        next.revision += 1
+        // Readers take a shallow immutable snapshot. Expensive posting updates happen
+        // outside the reader lock, so background indexing cannot block a keypress.
+        lock.lock(); state = next; lock.unlock()
+    }
+    private static func newer(_ a: String, than b: String, files: [String: FileRecord]) -> Bool {
+        guard let first = files[a], let second = files[b] else { return a < b }
+        return first.modified == second.modified ? a < b : first.modified > second.modified
     }
     private static func insert(_ file: FileRecord, into state: inout Snapshot) {
         guard FileSearchQuery.allows(file.url) else { return }
@@ -128,7 +165,15 @@ public final class SearchCatalog: @unchecked Sendable {
         state.names[path] = file.name.lowercased()
         state.nameWords[path] = names; state.documentWords[path] = words
         let metadata = Self.metadataTerms(file)
-        for term in words.union(metadata) { state.postings[term, default: []].insert(path) }
+        state.metadataWords[path] = metadata
+        if let vector = file.vector {
+            let norm = sqrt(VectorMath.dot(vector, vector))
+            if norm.isFinite && norm > 0 { state.vectorNorms[path] = norm }
+        }
+        for term in words.union(metadata) {
+            if state.postings[term] == nil { state.vocabularyDirty = true }
+            state.postings[term, default: []].insert(path)
+        }
     }
     private static func metadataTerms(_ file: FileRecord) -> Set<String> {
         var terms = Set(["#ext:" + file.url.pathExtension.lowercased()] + file.url.deletingLastPathComponent().pathComponents.map { "#folder:" + $0.lowercased() })
@@ -137,15 +182,15 @@ public final class SearchCatalog: @unchecked Sendable {
         }
         return terms
     }
-    private func remove(_ path: String) {
-        guard let file = state.files.removeValue(forKey: path) else { return }
-        let metadata = Self.metadataTerms(file)
+    private static func remove(_ path: String, from state: inout Snapshot) {
+        guard state.files.removeValue(forKey: path) != nil else { return }
+        let metadata = state.metadataWords.removeValue(forKey: path) ?? []
         let words = state.documentWords.removeValue(forKey: path) ?? []
-        state.visualWords.removeValue(forKey: path)
+        state.visualWords.removeValue(forKey: path); state.vectorNorms.removeValue(forKey: path)
         state.names.removeValue(forKey: path); state.nameWords.removeValue(forKey: path)
         for term in words.union(metadata) {
             state.postings[term]?.remove(path)
-            if state.postings[term]?.isEmpty == true { state.postings.removeValue(forKey: term) }
+            if state.postings[term]?.isEmpty == true { state.postings.removeValue(forKey: term); state.vocabularyDirty = true }
         }
     }
     public func matches(_ input: String, now: Date = Date(), vector: [Double]? = nil, engine: String? = nil, limit: Int = 100) -> [FileSearchMatch] {
@@ -186,7 +231,33 @@ public final class SearchCatalog: @unchecked Sendable {
             let paths = snapshot.postings["#place:" + PhotoLocation.normalized(place)] ?? []
             candidates = candidates.map { $0.intersection(paths) } ?? paths
         }
+        if plan.topic.terms.isEmpty {
+            let ordered: [String]
+            if let candidates, candidates.count < max(1, snapshot.recentPaths.count / 8) {
+                ordered = candidates.sorted { Self.newer($0, than: $1, files: snapshot.files) }
+            } else { ordered = snapshot.recentPaths }
+            var results: [FileSearchMatch] = []; results.reserveCapacity(min(limit, ordered.count))
+            var start = 0
+            if let before = plan.before {
+                var end = ordered.count
+                while start < end {
+                    let middle = (start + end) / 2
+                    if let file = snapshot.files[ordered[middle]], file.modified >= before { start = middle + 1 }
+                    else { end = middle }
+                }
+            }
+            for path in ordered.dropFirst(start) {
+                guard let file = snapshot.files[path] else { continue }
+                if let after = plan.after, file.modified < after { break }
+                if let candidates, !candidates.contains(path) { continue }
+                if let place = plan.photoLocation, file.sensitive || file.imageContent?.location?.matches(place) != true { continue }
+                results.append(FileSearchMatch(file: file, score: 1, reason: plan.photoLocation != nil ? "Photo location metadata" : "Metadata filter"))
+                if results.count == limit { break }
+            }
+            return results
+        }
         let paths = candidates ?? Set(snapshot.files.keys)
+        let queryNorm = vector.map { sqrt(VectorMath.dot($0, $0)) } ?? 0
         func evaluate(_ path: String) -> (path: String, match: FileSearchMatch)? {
             guard let file = snapshot.files[path] else { return nil }
             if let place = plan.photoLocation, file.sensitive || file.imageContent?.location?.matches(place) != true { return nil }
@@ -194,9 +265,12 @@ public final class SearchCatalog: @unchecked Sendable {
             if let before = plan.before, file.modified >= before { return nil }
             if plan.topic.terms.isEmpty { return (path, FileSearchMatch(file: file, score: 1, reason: plan.photoLocation != nil ? "Photo location metadata" : "Metadata filter")) }
             let nameScore = plan.topic.coverage(words: snapshot.nameWords[path] ?? [])
-            let similarity = vector.flatMap { query in file.vector.map { document in
-                file.sensitive || (file.indexMetadata != nil && file.indexMetadata?.engine != engine) ? 0 : VectorMath.cosine(query, document)
-            } } ?? 0
+            let similarity: Double
+            if let query = vector, let document = file.vector, !file.sensitive,
+               file.indexMetadata == nil || file.indexMetadata?.engine == engine,
+               let norm = snapshot.vectorNorms[path], queryNorm.isFinite, queryNorm > 0 {
+                similarity = VectorMath.dot(query, document) / (queryNorm * norm)
+            } else { similarity = 0 }
             let coverage = plan.topic.coverage(words: snapshot.documentWords[path] ?? [])
             let score: Double
             if plan.topic.terms.isEmpty { score = 1 }
@@ -228,4 +302,54 @@ public final class SearchCatalog: @unchecked Sendable {
         }
         return best.map(\.match)
     }
+    /// Sparse file→term→file traversal; never materializes an all-pairs similarity graph.
+    public func relatedFiles(to source: URL, limit: Int = 8) -> [FileRelationship] {
+        guard limit > 0 else { return [] }
+        lock.lock(); let snapshot = state; lock.unlock()
+        let path = source.path
+        guard let origin = snapshot.files[path], !origin.sensitive else { return [] }
+        let stop: Set<String> = ["the", "and", "of", "to", "a", "in", "is", "for", "on", "with", "this", "that", "from", "are", "be", "as", "by", "or", "it", origin.url.pathExtension.lowercased()]
+        let features = (snapshot.documentWords[path] ?? []).compactMap { term -> (String, Double)? in
+            guard term.count > 2, !stop.contains(term), let postings = snapshot.postings[term],
+                  postings.count > 1, postings.count <= max(32, snapshot.files.count / 2) else { return nil }
+            return (term, log(1 + Double(snapshot.files.count) / Double(postings.count)))
+        }.sorted { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 > $1.1 }.prefix(24)
+        var votes: [String: Double] = [:]
+        for (term, weight) in features {
+            for candidate in (snapshot.postings[term] ?? []).prefix(128) where candidate != path {
+                if votes.count < 1024 || votes[candidate] != nil { votes[candidate, default: 0] += weight }
+            }
+        }
+        // When lexical overlap is sparse, inspect a bounded local neighborhood of the
+        // same format; the content vector still has to substantiate a relationship.
+        if votes.count < min(limit, 32) {
+            let peers = snapshot.postings["#ext:" + origin.url.pathExtension.lowercased()] ?? []
+            for candidate in peers.prefix(256) where candidate != path && votes[candidate] == nil { votes[candidate] = 0 }
+        }
+        var relationships: [FileRelationship] = []
+        for (candidate, weight) in votes {
+            guard let file = snapshot.files[candidate], !file.sensitive else { continue }
+            var similarity: Double? = nil
+            if let a = origin.vector, let b = file.vector, a.count == b.count,
+               origin.indexMetadata?.engine == file.indexMetadata?.engine,
+               let na = snapshot.vectorNorms[path], let nb = snapshot.vectorNorms[candidate] {
+                similarity = VectorMath.dot(a, b) / (na * nb)
+            }
+            guard weight > 0 || (similarity ?? 0) >= 0.65 else { continue }
+            let shared = features.filter { snapshot.documentWords[candidate]?.contains($0.0) == true }.map(\.0)
+            relationships.append(FileRelationship(file: file, score: weight + max(0, similarity ?? 0) * 2,
+                similarity: similarity, sharedTerms: Array(shared.prefix(4))))
+        }
+        return Array(relationships.sorted { $0.score == $1.score ? $0.file.url.path < $1.file.url.path : $0.score > $1.score }.prefix(min(limit, 32)))
+    }
+
+}
+
+
+public struct FileRelationship: Identifiable, Sendable {
+    public var id: UUID { file.id }
+    public let file: FileRecord
+    public let score: Double
+    public let similarity: Double?
+    public let sharedTerms: [String]
 }

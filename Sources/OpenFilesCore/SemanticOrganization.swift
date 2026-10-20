@@ -55,6 +55,7 @@ public enum SemanticOrganizer {
 
     static func exclusion(_ source: URL, roots: [URL], output: URL, appData: URL, excluded: [URL], folderProtection: inout [String: Bool]) -> String? {
         let fm = FileManager.default
+        if FileRules.photoLibrary(containing: source.canonical) != nil { return "Photos library managed by Photos" }
         guard let root = roots.filter({ FileRules.contains($0, source) }).min(by: { $0.path.count < $1.path.count }) else { return "Outside personal file scope" }
         if FileRules.contains(output, source) { return "Already organized" }
         if FileRules.contains(appData, source) || excluded.contains(where: { FileRules.contains($0, source) }) { return "Excluded location" }
