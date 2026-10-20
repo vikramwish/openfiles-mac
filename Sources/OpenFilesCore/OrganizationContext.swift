@@ -32,6 +32,12 @@ public struct OrganizationContext: Sendable {
         let transactionWords = ["receipt", "receipts", "invoice", "invoices", "warranty", "warranties", "reimbursement"]
         if score(transactionWords) >= 2 || (image != nil && !content.isDisjoint(with: transactionWords)) {
             let kind = matches(["warranty", "warranties"]) ? "Warranties" : matches(["invoice", "invoices"]) ? "Invoices" : "Receipts"
+            if let client = folder(after: ["clients", "client"]) {
+                return result("Work", ["Work", "Clients", client, kind], "Existing client folder: \(client). Document terms identify \(kind.lowercased()).")
+            }
+            if let trip = folder(after: ["trips", "travel", "holidays", "vacations"]) {
+                return result("Travel", ["Travel", "Trips", trip, kind], "Existing trip folder: \(trip). Document terms identify \(kind.lowercased()).")
+            }
             let context = folder(after: ["purchases", "shopping", "expenses"])
             return result("Purchases", ["Purchases", kind] + context.map { [$0] }.defaultEmpty, "Document terms or existing folder identify \(kind.lowercased()).")
         }
@@ -51,9 +57,19 @@ public struct OrganizationContext: Sendable {
                 (["flower", "flowers", "plant", "plants", "garden"], "Nature", "Plants and Gardens"),
                 (["food", "meal", "dish", "cuisine", "dessert"], "Food", "Food"),
                 (["building", "architecture", "skyscraper"], "Places", "Architecture"),
-                (["car", "cars", "motorcycle", "vehicle"], "Vehicles", "Vehicles")
+                (["car", "cars", "motorcycle", "vehicle"], "Vehicles", "Vehicles"),
+                (["portrait", "selfie", "person", "people", "face"], "People", "Portraits and People")
             ]
-            if visual.contains("screenshot") || matches(["screenshot", "screenshots"]) {
+            let screenshot = visual.contains("screenshot") || matches(["screenshot", "screenshots"]) || (filename.contains("screen") && filename.contains("shot"))
+            if let client = folder(after: ["clients", "client"]) {
+                let kind = screenshot ? "Screenshots" : matches(["logo", "logos"]) || visual.contains("logo") ? "Logos" : matches(["design", "diagram", "mockup", "render"]) ? "Design" : "Images"
+                return result("Work", ["Work", "Clients", client, kind], "Existing client folder: \(client). Image labels: \(visualDescriptions.isEmpty ? "no specific scene" : visualDescriptions).")
+            }
+            if let course = folder(after: ["courses", "university", "college", "study"]) {
+                let kind = matches(["diagram", "diagrams", "chart", "charts"]) || visual.contains("diagram") ? "Diagrams" : "Images"
+                return result("Study", ["Study", "Courses", course, kind], "Existing course folder: \(course). Image labels: \(visualDescriptions.isEmpty ? "no specific scene" : visualDescriptions).")
+            }
+            if screenshot {
                 return result("Creative", ["Creative", "Screenshots"] + folder(after: ["screenshots"]).map { [$0] }.defaultEmpty, "Screenshot evidence in image labels, filename, or current folder.")
             }
             if let event { return result("Photos", ["Photos", "Events", event], "Existing event folder: \(event). Image labels: \(visualDescriptions.isEmpty ? "no specific scene" : visualDescriptions).") }

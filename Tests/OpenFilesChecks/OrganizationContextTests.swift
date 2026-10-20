@@ -35,6 +35,10 @@ struct OrganizationContextChecks {
         photo.imageContent = try image(subjects: [("beach", 0.95), ("outdoor", 0.9)])
         checkEqual(OrganizationContext.suggest(for: photo)?.folders, ["Photos", "Trips", "Japan", "Beaches"])
         checkTrue(OrganizationContext.suggest(for: photo)?.reasons.joined().contains("beach") == true)
+        photo.url = URL(fileURLWithPath: "/Fixtures/Documents/Clients/Acme/logo.png")
+        checkEqual(OrganizationContext.suggest(for: photo)?.folders, ["Work", "Clients", "Acme", "Logos"])
+        photo.url = URL(fileURLWithPath: "/Fixtures/Documents/Courses/COMP1511/diagram.png")
+        checkEqual(OrganizationContext.suggest(for: photo)?.folders, ["Study", "Courses", "COMP1511", "Diagrams"])
         photo.url = URL(fileURLWithPath: "/Fixtures/Pictures/IMG_0001.jpg")
         photo.imageContent = try image(subjects: [("zebra", 0.9)])
         checkEqual(OrganizationContext.suggest(for: photo)?.folders, ["Photos", "Wildlife", "Zebras"])
@@ -64,7 +68,7 @@ struct OrganizationContextChecks {
         _ = try await library.load(); await library.enableDefaultDiscovery(home: home); _ = try await library.scan()
         let preview = try await library.previewSemanticOrganization(home: home)
         checkTrue(preview.modelAvailable); checkEqual(preview.suggestions.count, 2)
-        guard let nested = preview.suggestions.first(where: { $0.source.resolvingSymlinksInPath().standardizedFileURL == files[0].resolvingSymlinksInPath().standardizedFileURL }) else {
+        guard let nested = preview.suggestions.first(where: { $0.source.resolvingSymlinksInPath().path == files[0].resolvingSymlinksInPath().path }) else {
             let current = await library.current()
             throw OpenFilesError.message("No nested course suggestion; skips: \(preview.skipped); records: \(current.files.map { ($0.name, $0.indexMetadata?.detail ?? "none") })")
         }

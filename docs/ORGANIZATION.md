@@ -10,7 +10,7 @@ Examples include `Study/Courses/COMP1511/Lectures`, `Work/Clients/Acme/Proposals
 
 The eight broad embedding topics remain a fallback for readable documents: Work, Study, Travel, Home, Creative, Purchases, Events, and Cooking. Semantic fallback still requires similarity of at least 0.45 and a margin of at least 0.06. Grounded context suggestions also work without an embedding backend. Unsupported files without indexed content stay in place; extracted content remains bounded by the indexer.
 
-Destinations are `~/Organized/<context folders>/<filename>`, with readable, sanitized single folder components. Suggestions show the whole relative destination and the evidence used; Preview file opens the selected original for review. Existing filenames and duplicate proposals receive numbered suffixes. The screen shows both paths, similarity, margin, extraction evidence, and skip counts. It reviews at most 200 suggestions at a time and reports additional candidate matches. After applying a batch, analyze again for the remainder. Files already in the destination tree are excluded.
+Destinations are `~/Organized/<context folders>/<filename>`, with readable, sanitized single folder components. Suggestions show the source and full relative destination hierarchy alongside the evidence, similarity, margin, extraction details, and skip counts; Preview file opens the selected original for review. Existing filenames and duplicate proposals receive numbered suffixes. The planner reviews at most 200 suggestions at a time and reports additional candidate matches. After applying a batch, analyze again for the remainder. Files already in the destination tree are excluded.
 
 ## Applying a review
 
