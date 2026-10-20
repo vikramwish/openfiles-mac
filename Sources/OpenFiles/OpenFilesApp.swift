@@ -53,7 +53,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         SemanticSearchService.shared.stop()
         if smokeRoot != nil { return .terminateNow }
-        guard let model else { return .terminateNow }
         Task {
             do { await model.finishIndexingBeforeQuit(); _ = try await model.vault.lock(); await self.searchPanel?.shutdown(); sender.reply(toApplicationShouldTerminate: true) }
             catch {
