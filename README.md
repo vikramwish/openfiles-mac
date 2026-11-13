@@ -1,12 +1,18 @@
+<p align="center">
+  <img src="Resources/AppIcon.png" alt="OpenFiles app icon" width="120" />
+</p>
+
 # OpenFiles
 
 **A native macOS file assistant that actually understands your files.**
 
 Finder-like browsing, on-device semantic search across documents *and* photos, a reviewed LLM file agent, Google Drive / OneDrive integration, and local version history — one SwiftUI app, zero third-party dependencies, everything on your Mac by default.
 
+[![CI](https://github.com/vikramwish/openfiles-mac/actions/workflows/ci.yml/badge.svg)](https://github.com/vikramwish/openfiles-mac/actions/workflows/ci.yml)
 ![macOS](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple)
 ![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138?logo=swift)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-2ea44f)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Privacy](https://img.shields.io/badge/processing-on--device-blue)
 
 ---
@@ -62,6 +68,16 @@ Open **Ask Hermes** (⌘⇧A), describe what you want in plain English, and the 
 
 ## Architecture
 
+```mermaid
+flowchart LR
+  UI["OpenFiles (SwiftUI / AppKit)"] --> Core["OpenFilesCore (Search, Rules, Versions, Vault)"]
+  UI --> Cloud["OpenFilesCloud (Drive & OneDrive Sync)"]
+  UI --> Agent["OpenFilesAgent (Plan-Only Reviewed LLM Flows)"]
+  Core --> Py["finder_search (Python BGE-small + SigLIP2)"]
+  Agent --> Core
+  Agent -. "opt-in OPENFILES_MLX=1" .-> MLX["OpenFilesMLX (EmbeddingGemma 2)"]
+```
+
 ```
 Sources/
 ├── OpenFiles/        # SwiftUI app: browser, panels, agent UI, cloud views
@@ -74,6 +90,24 @@ tests/                # dependency-free check runners (no XCTest needed)
 ```
 
 Module boundaries are strict: UI never touches the filesystem directly; every external integration goes through a mockable transport with its own fixture checks. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+---
+
+## Verification & Checks
+
+Run the full dependency-free test suites and app bundle verification locally on macOS 14+:
+
+```sh
+./scripts/test.sh                # OpenFilesChecks + OpenFilesCloudChecks + OpenFilesAgentChecks
+./scripts/test-window-sizing.sh  # AppKit WindowHosting regression checks
+./scripts/build-app.sh           # builds & codesigns build/OpenFiles.app
+```
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE).
 
 ---
 

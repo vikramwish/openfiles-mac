@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS Swift suites & app bundle
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: .build
+          key: ${{ runner.os }}-swift-${{ hashFiles('Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-swift-
+      - name: Run Swift check suites
+        run: |
+          swift --version
+          if swift run --help | grep -q -- '--build-system'; then
+            ./scripts/test.sh
+            ./scripts/build-app.sh
+          else
+            swift run OpenFilesChecks
+            swift run OpenFilesCloudChecks
+            swift run OpenFilesAgentChecks
+            swift build --product OpenFiles
+          fi
+      - name: Run window sizing checks
+        run: ./scripts/test-window-sizing.sh
+      - name: Check finder_search Python syntax
+        run: python3 -m py_compile finder_search/*.py
